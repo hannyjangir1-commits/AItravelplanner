@@ -1,0 +1,16 @@
+{
+  "name": "travelplanner",
+  "version": "1.0.0",
+  "description": "AI Travel Agent — Personalized Destination Experience Planner",
+  "scripts": {
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run dev:server\" \"npm run dev:client\"",
+    "build:server": "npm run build --prefix server",
+    "build:client": "npm run build --prefix client",
+    "build": "npm run build:server && npm run build:client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
