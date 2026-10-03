@@ -551,6 +551,43 @@ h1, h2, h3, h4, h5, h6 {
   color: #92400e;
 }
 
+.alert-success {
+  background-color: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.12);
+  animation: slideDownFade 0.3s ease-out;
+}
+
+.btn-alert-close {
+  background: transparent;
+  border: none;
+  color: #065f46;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+  opacity: 0.7;
+  transition: opacity var(--transition-fast);
+}
+
+.btn-alert-close:hover {
+  opacity: 1;
+}
+
+@keyframes slideDownFade {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Submit Action Bar */
 .form-submit-footer {
   display: flex;

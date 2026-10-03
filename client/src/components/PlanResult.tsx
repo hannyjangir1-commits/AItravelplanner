@@ -194,11 +194,11 @@ export const PlanModifier: React.FC<PlanModifierProps> = ({ onModify, isModifyin
           {isModifying ? (
             <>
               <span className="spinner-ring"></span>
-              <span>Revising...</span>
+              <span>Modifying Plan...</span>
             </>
           ) : (
             <>
-              <span>Apply Modification</span>
+              <span>Modify Plan</span>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <line x1="5" y1="12" x2="19" y2="12"></line>
                 <polyline points="12 5 19 12 12 19"></polyline>
@@ -221,6 +221,8 @@ interface PlanResultProps {
   isModifying: boolean;
   modifyError?: string | null;
   onPlanAnother: () => void;
+  showModifiedSuccess?: boolean;
+  onDismissSuccess?: () => void;
 }
 
 export const PlanResult: React.FC<PlanResultProps> = ({
@@ -229,7 +231,9 @@ export const PlanResult: React.FC<PlanResultProps> = ({
   onModify,
   isModifying,
   modifyError,
-  onPlanAnother
+  onPlanAnother,
+  showModifiedSuccess,
+  onDismissSuccess
 }) => {
   const totalDays = Number(tripDetails.numberOfDays) || 1;
   const travellers = Number(tripDetails.numberOfTravellers) || 1;
@@ -239,6 +243,32 @@ export const PlanResult: React.FC<PlanResultProps> = ({
   return (
     <section className="results-dashboard" id="plan-results">
       <div className="container">
+        {/* Modification Success Banner */}
+        {showModifiedSuccess && (
+          <div className="alert-box alert-success" role="status">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ color: '#059669', flexShrink: 0 }}>
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+              <span>
+                <strong>Plan modified successfully!</strong> Showing your updated itinerary from the start.
+              </span>
+            </div>
+            {onDismissSuccess && (
+              <button
+                type="button"
+                className="btn-alert-close"
+                onClick={onDismissSuccess}
+                title="Dismiss banner"
+                aria-label="Dismiss"
+              >
+                &times;
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Executive Summary Header */}
         <div className="executive-summary-header">
           <div>
