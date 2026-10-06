@@ -12,22 +12,35 @@ export async function generateTravelPlan(formData: TripFormData): Promise<{ plan
     additionalNotes: formData.additionalNotes.trim() || undefined
   };
 
-  const response = await fetch('/api/generate-travel-plan', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
+  let response: Response;
+  try {
+    response = await fetch('/api/generate-travel-plan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    throw new Error('Unable to connect to the travel planning service. Please verify your network connection and ensure the server is active.');
+  }
 
-  const data: ApiResponse<TravelPlan> = await response.json();
+  let data: ApiResponse<TravelPlan>;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`The server responded with an unexpected status (${response.status}). Please try again in a few moments.`);
+  }
 
   if (!response.ok || !data.data) {
-    throw new Error(data.error || 'Failed to generate travel plan from the server.');
+    throw new Error(data.error || `Failed to generate travel plan (Status ${response.status}).`);
   }
 
   return {
-    plan: data.data,
+    plan: {
+      ...data.data,
+      generatedAt: data.data.generatedAt || new Date().toISOString()
+    },
     isDemo: Boolean(data.isDemo),
     message: data.message
   };
@@ -53,22 +66,35 @@ export async function modifyTravelPlan(
     modificationRequest: modificationRequest.trim()
   };
 
-  const response = await fetch('/api/modify-travel-plan', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
+  let response: Response;
+  try {
+    response = await fetch('/api/modify-travel-plan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    throw new Error('Unable to connect to the travel planning service. Please verify your network connection and ensure the server is active.');
+  }
 
-  const data: ApiResponse<TravelPlan> = await response.json();
+  let data: ApiResponse<TravelPlan>;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`The server responded with an unexpected status (${response.status}). Please try again in a few moments.`);
+  }
 
   if (!response.ok || !data.data) {
-    throw new Error(data.error || 'Failed to update travel plan with the new modifications.');
+    throw new Error(data.error || `Failed to update travel plan (Status ${response.status}).`);
   }
 
   return {
-    plan: data.data,
+    plan: {
+      ...data.data,
+      generatedAt: data.data.generatedAt || new Date().toISOString()
+    },
     isDemo: Boolean(data.isDemo),
     message: data.message
   };
