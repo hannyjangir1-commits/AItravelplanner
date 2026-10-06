@@ -133,7 +133,7 @@ export const PlanModifier: React.FC<PlanModifierProps> = React.memo(({ onModify,
 
   const handleSuggestionClick = (suggestion: string) => {
     if (isModifying) return;
-    onModify(suggestion);
+    setInputText(suggestion);
   };
 
   return (
@@ -403,6 +403,7 @@ export const PlanResult: React.FC<PlanResultProps> = ({
 
           <div className="action-buttons-group">
             <button
+              type="button"
               className="btn-action-outline"
               onClick={() => window.print()}
               title="Print or save as PDF"
@@ -416,6 +417,7 @@ export const PlanResult: React.FC<PlanResultProps> = ({
               <span>Export PDF / Print</span>
             </button>
             <button
+              type="button"
               className="btn-action-outline"
               onClick={onPlanAnother}
               aria-label="Edit trip details and start another plan"
