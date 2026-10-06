@@ -9,9 +9,9 @@ COPY client/package.json client/package-lock.json ./client/
 COPY server/package.json server/package-lock.json ./server/
 
 # Use npm ci with lockfiles for deterministic, fast dependency installation
-RUN npm ci --omit=optional
-RUN npm ci --prefix client --omit=optional
-RUN npm ci --prefix server --omit=optional
+RUN npm ci
+RUN npm ci --prefix client
+RUN npm ci --prefix server
 
 # Copy source code after dependencies are installed
 COPY . .
@@ -30,7 +30,7 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node --from=builder /app/server/package.json /app/server/package-lock.json ./server/
 
 # Install only production dependencies for the server using npm ci
-RUN npm ci --prefix server --omit=dev --omit=optional
+RUN npm ci --prefix server --omit=dev
 
 # Copy built server files
 COPY --chown=node:node --from=builder /app/server/dist ./server/dist
