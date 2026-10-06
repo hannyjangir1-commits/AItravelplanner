@@ -172,14 +172,14 @@ export function App() {
         <div className="container footer-inner">
           <div>
             <div style={{ fontWeight: 700, color: '#ffffff', fontSize: '1rem', marginBottom: '0.25rem' }}>
-              AI Travel Agent &bull; Enterprise Destination Planner
+              TravelGenie &bull; Enterprise Destination Planner
             </div>
             <p className="footer-disclaimer">
               Tailored destination intelligence, accommodations, culinary heritage, activities, and day-by-day schedules.{isDemoPlan ? ' Currently displaying demo fallback plan.' : ' Powered by Google Gemini AI.'} All recommendations and budget calculations are advisory estimates.
             </p>
           </div>
           <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-            &copy; {new Date().getFullYear()} AI Travel Agent. All rights reserved.
+            &copy; {new Date().getFullYear()} TravelGenie. All rights reserved.
           </div>
         </div>
       </footer>
