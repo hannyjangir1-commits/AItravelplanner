@@ -35,7 +35,25 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Security: Dynamic CORS configuration allowing localhost development and configured production domains
+// Serve React static files in production
+const clientDistPath = process.env.CLIENT_DIST_PATH || path.resolve(__dirname, '../../client/dist');
+console.log('[DEBUG] Serving static files from:', clientDistPath);
+
+// Serve static assets from /assets with immutable caching
+app.use('/assets', express.static(path.join(clientDistPath, 'assets'), {
+  immutable: true,
+  maxAge: '1y'
+}));
+
+// A missing JS/CSS asset in /assets must return 404 text/plain, NOT index.html and NOT JSON
+app.all('/assets/*', (_req: Request, res: Response) => {
+  res.status(404).type('text/plain').send('Asset not found');
+});
+
+// Serve remaining root static files (favicon, robots.txt, etc.)
+app.use(express.static(clientDistPath));
+
+// Security: Dynamic CORS configuration allowing localhost development, Render domains, and configured origins
 const defaultAllowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
@@ -49,16 +67,34 @@ const envOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
   : [];
 
+if (process.env.RENDER_EXTERNAL_URL) {
+  envOrigins.push(process.env.RENDER_EXTERNAL_URL);
+}
+
 const allowedOrigins = [...defaultAllowedOrigins, ...envOrigins];
 
 app.use(cors({
   origin: (origin, callback) => {
     // Allow same-origin requests, local dev origins, or curl/server-to-server calls with no origin header
     if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Cross-Origin Request Blocked by Security Policy.'));
+      return callback(null, true);
     }
+
+    try {
+      const parsedOrigin = new URL(origin);
+      if (
+        parsedOrigin.hostname === 'localhost' ||
+        parsedOrigin.hostname === '127.0.0.1' ||
+        parsedOrigin.hostname.endsWith('.onrender.com')
+      ) {
+        return callback(null, true);
+      }
+    } catch {
+      // Invalid URL format falls through
+    }
+
+    // Disallow cross-origin requests by passing false (standard CORS rejection without throwing 500 Error)
+    callback(null, false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -97,11 +133,6 @@ const aiRateLimiter = rateLimit({
     error: 'Rate limit exceeded: Too many travel planning requests from your network. Please wait a few minutes before trying again.'
   }
 });
-
-// Serve React static files in production
-const clientDistPath = path.join(__dirname, '../../client/dist');
-console.log('[DEBUG] Serving static files from:', clientDistPath);
-app.use(express.static(clientDistPath));
 
 // Health check endpoint (safe status check without secret leakage)
 app.get('/api/health', (_req: Request, res: Response) => {
