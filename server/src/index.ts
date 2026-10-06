@@ -100,6 +100,7 @@ const aiRateLimiter = rateLimit({
 
 // Serve React static files in production
 const clientDistPath = path.join(__dirname, '../../client/dist');
+console.log('[DEBUG] Serving static files from:', clientDistPath);
 app.use(express.static(clientDistPath));
 
 // Health check endpoint (safe status check without secret leakage)
@@ -181,6 +182,13 @@ app.all('/api/*', (_req: Request, res: Response) => {
   });
 });
 
+
+
+// Fallback route for SPA (React router / client-side routing)
+app.get('*', (_req: Request, res: Response) => {
+  res.sendFile(path.join(clientDistPath, 'index.html'));
+});
+
 // Global unhandled error handler middleware
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error('[Unhandled Global Server Error]:', err?.message || err);
@@ -188,11 +196,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     success: false,
     error: 'An internal server error occurred. Please try again later.'
   });
-});
-
-// Fallback route for SPA (React router / client-side routing)
-app.get('*', (_req: Request, res: Response) => {
-  res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
 app.listen(PORT, () => {
