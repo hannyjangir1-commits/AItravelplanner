@@ -1,9 +1,14 @@
 node_modules
 client/node_modules
 server/node_modules
-npm-debug.log
-.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+**/.env*
+*.env
+*.env.local
 .git
 .gitignore
 client/dist
 server/dist
+scratch/
