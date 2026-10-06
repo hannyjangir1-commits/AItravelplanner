@@ -31,6 +31,7 @@ export interface TravelPlan {
   weatherAdvice: string;
   budgetTips: string[];
   itinerary: DayPlan[];
+  generatedAt?: string;
 }
 
 export interface GeneratePlanRequest {
