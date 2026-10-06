@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import type { TravelPlan, TripFormData } from './types';
 import { generateTravelPlan, modifyTravelPlan } from './api';
 import { Header } from './components/Header';
@@ -6,28 +6,20 @@ import { HeroLanding } from './components/HeroLanding';
 import { TravelForm } from './components/TravelForm';
 import { PlanResult } from './components/PlanResult';
 
-const STORAGE_KEY_PLAN = 'aitravel_plan';
-const STORAGE_KEY_DETAILS = 'aitravel_details';
-const STORAGE_KEY_JUST_MODIFIED = 'aitravel_just_modified';
+import {
+  loadStoredSession,
+  saveAppSessionStorage,
+  clearAppSessionStorage,
+  checkAndClearJustModifiedFlag,
+  type StoredSessionState
+} from './storage';
 
 export function App() {
-  const [currentPlan, setCurrentPlan] = useState<TravelPlan | null>(() => {
-    try {
-      const saved = sessionStorage.getItem(STORAGE_KEY_PLAN);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
-  const [currentTripDetails, setCurrentTripDetails] = useState<TripFormData | null>(() => {
-    try {
-      const saved = sessionStorage.getItem(STORAGE_KEY_DETAILS);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [initialSession] = useState<StoredSessionState>(() => loadStoredSession());
+  const [currentPlan, setCurrentPlan] = useState<TravelPlan | null>(initialSession.plan);
+  const [currentTripDetails, setCurrentTripDetails] = useState<TripFormData | null>(initialSession.details);
+  const [isDemoPlan, setIsDemoPlan] = useState<boolean>(initialSession.isDemo);
+  const [planMessage, setPlanMessage] = useState<string | null>(initialSession.message);
 
   const [isLoading, setIsLoading] = useState(false);
   const [isModifying, setIsModifying] = useState(false);
@@ -35,14 +27,9 @@ export function App() {
   const [modifyError, setModifyError] = useState<string | null>(null);
   const [showModifiedSuccess, setShowModifiedSuccess] = useState(false);
 
-  const formSectionRef = useRef<HTMLDivElement>(null);
-  const resultsSectionRef = useRef<HTMLDivElement>(null);
-
   // Check if page just reloaded after a modification
   useEffect(() => {
-    const justModified = sessionStorage.getItem(STORAGE_KEY_JUST_MODIFIED);
-    if (justModified === 'true') {
-      sessionStorage.removeItem(STORAGE_KEY_JUST_MODIFIED);
+    if (checkAndClearJustModifiedFlag()) {
       setShowModifiedSuccess(true);
 
       // Prevent browser from restoring scroll position to bottom
@@ -72,6 +59,7 @@ export function App() {
   };
 
   const handleGeneratePlan = async (formData: TripFormData) => {
+    if (isLoading) return;
     setIsLoading(true);
     setErrorMessage(null);
 
@@ -79,10 +67,11 @@ export function App() {
       const response = await generateTravelPlan(formData);
       setCurrentPlan(response.plan);
       setCurrentTripDetails(formData);
+      setIsDemoPlan(response.isDemo);
+      setPlanMessage(response.message || null);
 
-      // Save in session storage
-      sessionStorage.setItem(STORAGE_KEY_PLAN, JSON.stringify(response.plan));
-      sessionStorage.setItem(STORAGE_KEY_DETAILS, JSON.stringify(formData));
+      // Safely persist to sessionStorage
+      saveAppSessionStorage(response.plan, formData, response.isDemo, response.message);
 
       // Smooth scroll to results
       setTimeout(() => {
@@ -90,7 +79,7 @@ export function App() {
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
-      }, 150);
+      }, 100);
     } catch (err: any) {
       setErrorMessage(err.message || 'An error occurred while generating your travel plan. Please check your network and try again.');
     } finally {
@@ -99,7 +88,7 @@ export function App() {
   };
 
   const handleModifyPlan = async (modificationRequest: string) => {
-    if (!currentTripDetails || !currentPlan) return;
+    if (isModifying || !currentTripDetails || !currentPlan) return;
 
     setIsModifying(true);
     setModifyError(null);
@@ -107,13 +96,23 @@ export function App() {
     try {
       const response = await modifyTravelPlan(currentTripDetails, currentPlan, modificationRequest);
 
-      // Save updated plan in session storage so it persists across page refresh
-      sessionStorage.setItem(STORAGE_KEY_PLAN, JSON.stringify(response.plan));
-      sessionStorage.setItem(STORAGE_KEY_DETAILS, JSON.stringify(currentTripDetails));
-      sessionStorage.setItem(STORAGE_KEY_JUST_MODIFIED, 'true');
+      // Save updated plan in session storage so it persists across manual page refreshes
+      saveAppSessionStorage(response.plan, currentTripDetails, response.isDemo, response.message);
 
-      // Refresh page and show from the start of the plan
-      window.location.reload();
+      // Instantaneous in-place state update without an expensive browser page reload
+      setCurrentPlan(response.plan);
+      setIsDemoPlan(response.isDemo);
+      setPlanMessage(response.message || null);
+      setShowModifiedSuccess(true);
+      setIsModifying(false);
+
+      // Smoothly scroll to the very start of the updated plan
+      setTimeout(() => {
+        const el = document.getElementById('plan-results');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 50);
     } catch (err: any) {
       setModifyError(err.message || 'Failed to update travel plan. Please try again.');
       setIsModifying(false);
@@ -121,11 +120,11 @@ export function App() {
   };
 
   const handleStartNewPlan = () => {
-    sessionStorage.removeItem(STORAGE_KEY_PLAN);
-    sessionStorage.removeItem(STORAGE_KEY_DETAILS);
-    sessionStorage.removeItem(STORAGE_KEY_JUST_MODIFIED);
+    clearAppSessionStorage();
     setCurrentPlan(null);
     setCurrentTripDetails(null);
+    setIsDemoPlan(false);
+    setPlanMessage(null);
     setErrorMessage(null);
     setModifyError(null);
     setShowModifiedSuccess(false);
@@ -134,24 +133,30 @@ export function App() {
 
   return (
     <div className="app-layout" id="top">
+      <a href="#main-content" className="skip-to-content-link">
+        Skip to main content
+      </a>
       <Header onNewPlan={handleStartNewPlan} hasPlan={Boolean(currentPlan)} />
 
-      <main>
+      <main id="main-content" tabIndex={-1}>
         {!currentPlan && <HeroLanding onPlanClick={scrollToForm} />}
 
-        <div ref={formSectionRef}>
+        <div>
           <TravelForm
             onSubmit={handleGeneratePlan}
             isLoading={isLoading}
             errorMessage={errorMessage}
+            onDismissError={() => setErrorMessage(null)}
           />
         </div>
 
         {currentPlan && currentTripDetails && (
-          <div ref={resultsSectionRef}>
+          <div>
             <PlanResult
               plan={currentPlan}
               tripDetails={currentTripDetails}
+              isDemo={isDemoPlan}
+              planMessage={planMessage}
               onModify={handleModifyPlan}
               isModifying={isModifying}
               modifyError={modifyError}
@@ -170,10 +175,10 @@ export function App() {
               AI Travel Agent &bull; Enterprise Destination Planner
             </div>
             <p className="footer-disclaimer">
-              Tailored destination intelligence, accommodations, culinary heritage, activities, and day-by-day schedules. Powered by Google Gemini AI. All recommendations and budget calculations are advisory estimates.
+              Tailored destination intelligence, accommodations, culinary heritage, activities, and day-by-day schedules.{isDemoPlan ? ' Currently displaying demo fallback plan.' : ' Powered by Google Gemini AI.'} All recommendations and budget calculations are advisory estimates.
             </p>
           </div>
-          <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+          <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
             &copy; {new Date().getFullYear()} AI Travel Agent. All rights reserved.
           </div>
         </div>
