@@ -13,7 +13,7 @@ export const HeroLanding: React.FC<HeroLandingProps> = ({ onPlanClick }) => {
             <span>Destination Experience Advisory</span>
           </div>
 
-          <h1 className="hero-headline">AI Travel Agent</h1>
+          <h1 className="hero-headline">TravelGenie</h1>
           
           <p className="hero-subtext">
             Create a personalized travel plan for your destination.
