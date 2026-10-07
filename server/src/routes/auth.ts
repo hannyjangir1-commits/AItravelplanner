@@ -1,166 +1,67 @@
 import { Router, Request, Response } from 'express';
-import crypto from 'crypto';
-import { OAuth2Client } from 'google-auth-library';
-import { getAuthConfig, isAuthConfigured } from '../auth/config.js';
 import { signAuthToken } from '../auth/jwt.js';
-import { findOrCreateGoogleUser, getUserById, updateUserProfile } from '../db/users.js';
+import { hashPassword, verifyPassword } from '../auth/password.js';
+import { createUser, getUserByUsername, getUserById, updateUserProfile } from '../db/users.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-const OAUTH_STATE_COOKIE = 'oauth_state';
 const AUTH_TOKEN_COOKIE = 'travelgenie_auth';
-const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
 const AUTH_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
- * Constant-time string comparison to safely prevent timing attacks on OAuth state tokens.
+ * POST /api/auth/signup
+ * Registers a new user with username and password.
+ * Hashes password securely, creates database record, and issues JWT session cookie.
  */
-function safeStateCompare(a: string | null, b: string | null): boolean {
-  if (!a || !b) {
-    return false;
-  }
-  const bufA = Buffer.from(a, 'utf-8');
-  const bufB = Buffer.from(b, 'utf-8');
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-/**
- * GET /api/auth/google
- * Initiates the Google OAuth 2.0 flow with state CSRF protection.
- */
-router.get('/google', (_req: Request, res: Response): void => {
+router.post('/signup', async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!isAuthConfigured()) {
-      console.error('[OAuth Error] Google OAuth environment configuration is incomplete.');
-      res.status(503).send('Authentication service is not configured.');
+    const { username, password } = req.body || {};
+
+    if (!username || typeof username !== 'string') {
+      res.status(400).json({ error: 'Username is required.' });
       return;
     }
 
-    const config = getAuthConfig();
-    const oauth2Client = new OAuth2Client(
-      config.googleClientId,
-      config.googleClientSecret,
-      config.googleCallbackUrl
-    );
-
-    // Generate cryptographically secure random state value for CSRF mitigation
-    const state = crypto.randomBytes(32).toString('hex');
-
-    // Store state in a short-lived httpOnly cookie
-    res.cookie(OAUTH_STATE_COOKIE, state, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      path: '/',
-      maxAge: OAUTH_STATE_MAX_AGE_MS
-    });
-
-    // Request standard OpenID Connect profile scopes
-    const authUrl = oauth2Client.generateAuthUrl({
-      access_type: 'online',
-      scope: ['openid', 'email', 'profile'],
-      state
-    });
-
-    // Strictly redirect to Google authorization URL (no arbitrary redirect parameter accepted)
-    res.redirect(authUrl);
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown initialization error';
-    console.error('[OAuth Initiate Error]:', errorMsg);
-    res.status(500).send('Authentication failed');
-  }
-});
-
-/**
- * GET /api/auth/google/callback
- * Exchanges authorization code, verifies Google identity, syncs user in PostgreSQL,
- * and sets application JWT session cookie.
- */
-router.get('/google/callback', async (req: Request, res: Response): Promise<void> => {
-  // Extract and validate query parameters
-  const code = typeof req.query.code === 'string' ? req.query.code : null;
-  const state = typeof req.query.state === 'string' ? req.query.state : null;
-  const cookieState = typeof req.cookies?.[OAUTH_STATE_COOKIE] === 'string'
-    ? req.cookies[OAUTH_STATE_COOKIE]
-    : null;
-
-  // Clear the OAuth state cookie immediately so it cannot be reused in replay attempts
-  res.clearCookie(OAUTH_STATE_COOKIE, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/'
-  });
-
-  // Verify presence and validity of OAuth state
-  if (!code || !state || !cookieState || !safeStateCompare(state, cookieState)) {
-    console.warn('[OAuth Callback Warning] State mismatch or missing parameters during callback verification.');
-    res.status(400).send('Authentication failed');
-    return;
-  }
-
-  try {
-    if (!isAuthConfigured()) {
-      console.error('[OAuth Callback Error] Google OAuth configuration is missing.');
-      res.status(503).send('Authentication service is not configured.');
+    const cleanUsername = username.trim();
+    if (cleanUsername.length < 3 || cleanUsername.length > 30) {
+      res.status(400).json({ error: 'Username must be between 3 and 30 characters.' });
       return;
     }
 
-    const config = getAuthConfig();
-    const oauth2Client = new OAuth2Client(
-      config.googleClientId,
-      config.googleClientSecret,
-      config.googleCallbackUrl
-    );
-
-    // Exchange authorization code for tokens
-    const { tokens } = await oauth2Client.getToken(code);
-    if (!tokens.id_token) {
-      console.error('[OAuth Callback Error] Missing id_token in Google token exchange response.');
-      res.status(401).send('Authentication failed');
+    if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
+      res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores.' });
       return;
     }
 
-    // Cryptographically verify Google ID token
-    const ticket = await oauth2Client.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: config.googleClientId
-    });
-
-    const payload = ticket.getPayload();
-    if (!payload || !payload.sub || !payload.email || payload.email_verified !== true) {
-      console.error('[OAuth Callback Error] Google token payload missing required verified identity fields.');
-      res.status(401).send('Authentication failed');
+    if (!password || typeof password !== 'string') {
+      res.status(400).json({ error: 'Password is required.' });
       return;
     }
 
-    // Extract verified Google identity information
-    const googleId = payload.sub;
-    const email = payload.email;
-    const name = payload.name || null;
-    const profilePicture = payload.picture || null;
+    if (password.length < 8) {
+      res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+      return;
+    }
 
-    // Persist or retrieve user in PostgreSQL
-    const user = await findOrCreateGoogleUser({
-      googleId,
-      email,
-      name,
-      profilePicture
-    });
+    // Uniqueness check
+    const existing = await getUserByUsername(cleanUsername);
+    if (existing) {
+      res.status(409).json({ error: 'Username is already taken. Please choose another.' });
+      return;
+    }
 
-    // Issue application-level JWT (containing only minimal user identity, never Google tokens)
+    // Securely hash password using scrypt
+    const passwordHash = await hashPassword(password);
+    const user = await createUser(cleanUsername, passwordHash);
+
+    // Issue application-level JWT
     const appToken = signAuthToken({
       userId: user.id,
-      email: user.email,
-      name: user.name,
-      profilePicture: user.profilePicture
+      username: user.username
     });
 
-    // Set secure application authentication cookie
+    // Set secure HTTP-only cookie
     res.cookie(AUTH_TOKEN_COOKIE, appToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -169,20 +70,88 @@ router.get('/google/callback', async (req: Request, res: Response): Promise<void
       maxAge: AUTH_TOKEN_MAX_AGE_MS
     });
 
-    // Redirect to home root (fixed destination, no user-supplied redirection)
-    res.redirect('/');
+    res.status(201).json({
+      authenticated: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        place: user.place
+      }
+    });
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown callback error';
-    console.error('[OAuth Callback Error]:', errorMsg);
-    res.status(500).send('Authentication failed');
+    console.error('[Signup Route Error]:', error);
+    res.status(500).json({ error: 'Failed to create account. Please try again later.' });
+  }
+});
+
+/**
+ * POST /api/auth/signin
+ * Authenticates user with username and password.
+ * - If username does NOT exist: returns 404 with notFound flag to prompt Sign Up.
+ * - If username exists but password is incorrect: returns 401 without redirecting.
+ * - If credentials match: issues JWT session cookie.
+ */
+router.post('/signin', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { username, password } = req.body || {};
+
+    if (!username || typeof username !== 'string' || !password || typeof password !== 'string') {
+      res.status(400).json({ error: 'Username and password are required.' });
+      return;
+    }
+
+    const cleanUsername = username.trim();
+    const user = await getUserByUsername(cleanUsername);
+
+    if (!user) {
+      res.status(404).json({
+        error: 'Account does not exist. Please sign up.',
+        notFound: true
+      });
+      return;
+    }
+
+    const isMatch = await verifyPassword(password, user.passwordHash);
+    if (!isMatch) {
+      res.status(401).json({
+        error: 'Invalid username or password.'
+      });
+      return;
+    }
+
+    // Issue application-level JWT
+    const appToken = signAuthToken({
+      userId: user.id,
+      username: user.username
+    });
+
+    res.cookie(AUTH_TOKEN_COOKIE, appToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: AUTH_TOKEN_MAX_AGE_MS
+    });
+
+    res.status(200).json({
+      authenticated: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        place: user.place
+      }
+    });
+  } catch (error) {
+    console.error('[Signin Route Error]:', error);
+    res.status(500).json({ error: 'Failed to sign in. Please try again later.' });
   }
 });
 
 /**
  * GET /api/auth/me
- * Returns the currently authenticated user's profile if a valid session cookie exists.
- * Rejects unauthenticated requests with HTTP 401 via requireAuth middleware.
- * Never exposes JWT, secrets, Google tokens, or credentials.
+ * Returns the currently authenticated user's safe profile.
+ * Never exposes password_hash or credentials.
  */
 router.get('/me', requireAuth, async (req: Request, res: Response): Promise<void> => {
   if (!req.user || !req.user.userId) {
@@ -201,15 +170,13 @@ router.get('/me', requireAuth, async (req: Request, res: Response): Promise<void
       authenticated: true,
       user: {
         id: user.id,
+        username: user.username,
         name: user.name,
-        email: user.email,
-        profilePicture: user.profilePicture,
         place: user.place
       }
     });
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown database error';
-    console.error('[Get Profile Error]:', errorMsg);
+    console.error('[Get Profile Error]:', error);
     res.status(500).json({
       authenticated: false,
       error: 'An unexpected internal error occurred.'
@@ -219,8 +186,7 @@ router.get('/me', requireAuth, async (req: Request, res: Response): Promise<void
 
 /**
  * POST /api/auth/logout
- * Clears the travelgenie_auth cookie using identical cookie parameters.
- * Safe to call even if the user is already logged out or has no cookie.
+ * Clears the travelgenie_auth cookie.
  */
 router.post('/logout', (_req: Request, res: Response): void => {
   res.clearCookie(AUTH_TOKEN_COOKIE, {
@@ -237,9 +203,7 @@ router.post('/logout', (_req: Request, res: Response): void => {
 
 /**
  * PATCH /api/auth/profile
- * Allows the authenticated user to update their name and/or place.
- * Requires requireAuth middleware.
- * User ID comes strictly from req.user.userId.
+ * Allows the authenticated user to update their display name and/or place.
  */
 router.patch('/profile', requireAuth, async (req: Request, res: Response): Promise<void> => {
   if (!req.user || !req.user.userId) {
@@ -247,24 +211,22 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
     return;
   }
 
-  // 1. Validate request body is an object
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
     res.status(400).json({ error: 'Request body must be a valid JSON object.' });
     return;
   }
 
-  // 2. Reject attempts to modify unauthorized/sensitive fields
+  // Reject modifications to sensitive fields
   const DISALLOWED_FIELDS = [
     'id',
+    'username',
+    'password',
+    'password_hash',
     'google_id',
     'googleId',
     'email',
-    'profile_picture',
-    'profilePicture',
     'created_at',
-    'createdAt',
-    'updated_at',
-    'updatedAt'
+    'updated_at'
   ];
   for (const field of DISALLOWED_FIELDS) {
     if (field in req.body) {
@@ -273,7 +235,6 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
     }
   }
 
-  // 3. Validate name field if provided
   let sanitizedName: string | null | undefined = undefined;
   if ('name' in req.body) {
     if (typeof req.body.name !== 'string') {
@@ -288,7 +249,6 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
     sanitizedName = trimmed.length > 0 ? trimmed : null;
   }
 
-  // 4. Validate place field if provided
   let sanitizedPlace: string | null | undefined = undefined;
   if ('place' in req.body) {
     if (typeof req.body.place !== 'string') {
@@ -303,13 +263,11 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
     sanitizedPlace = trimmed.length > 0 ? trimmed : null;
   }
 
-  // 5. Ensure at least one updatable field is provided
   if (sanitizedName === undefined && sanitizedPlace === undefined) {
     res.status(400).json({ error: 'At least one field (name or place) must be provided.' });
     return;
   }
 
-  // 6. Execute update in database using authenticated user ID only
   try {
     const updatedUser = await updateUserProfile(req.user.userId, sanitizedName, sanitizedPlace);
 
@@ -325,15 +283,13 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
       authenticated: true,
       user: {
         id: updatedUser.id,
+        username: updatedUser.username,
         name: updatedUser.name,
-        email: updatedUser.email,
-        profilePicture: updatedUser.profilePicture,
         place: updatedUser.place
       }
     });
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown database error';
-    console.error('[Update Profile Route Error]:', errorMsg);
+    console.error('[Update Profile Route Error]:', error);
     res.status(500).json({
       authenticated: false,
       error: 'Failed to update profile. Please try again later.'
