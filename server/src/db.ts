@@ -14,11 +14,12 @@ dotenv.config({ override: false });
 // Using DATABASE_URL environment variable (from Render or local .env)
 const connectionString = process.env.DATABASE_URL;
 
+const isRemoteOrProd = process.env.NODE_ENV === 'production' ||
+  Boolean(connectionString && (connectionString.includes('render.com') || connectionString.includes('sslmode=require')));
+
 export const pool = new Pool({
   connectionString,
-  // If we are connecting to a remote Render database from outside Render, SSL might be required
-  // For production environments, it is often necessary to enable SSL
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
+  ssl: isRemoteOrProd ? { rejectUnauthorized: false } : undefined
 });
 
 /**
