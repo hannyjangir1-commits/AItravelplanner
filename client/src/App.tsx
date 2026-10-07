@@ -8,6 +8,7 @@ import { PlanResult } from './components/PlanResult';
 import { PreviousItineraries } from './components/PreviousItineraries';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
+import { AuthPage } from './components/AuthPage';
 
 import {
   loadStoredSession,
@@ -281,6 +282,64 @@ export function App() {
 
   const normalizedRoute = currentRoute.replace(/\/+$/, '') || '/';
 
+  // Render Authentication Page (/signin, /signup)
+  if (normalizedRoute === '/signin' || normalizedRoute === '/signup') {
+    if (user) {
+      navigate('/');
+      return null;
+    }
+    return (
+      <div className="app-layout" id="top">
+        <a href="#main-content" className="skip-to-content-link">
+          Skip to main content
+        </a>
+        <Header
+          onNewPlan={() => navigate('/')}
+          hasPlan={false}
+          user={null}
+          onOpenAuth={() => navigate('/signin')}
+        />
+        <AuthPage
+          initialMode={normalizedRoute === '/signup' ? 'signup' : 'login'}
+          onAuthSuccess={(authUser) => {
+            setUser(authUser);
+            navigate('/');
+          }}
+          onNavigateHome={() => navigate('/')}
+          onSwitchMode={(mode) => {
+            const target = mode === 'signup' ? '/signup' : '/signin';
+            window.history.pushState({}, '', target);
+            setCurrentRoute(target);
+          }}
+        />
+        <footer className="enterprise-footer">
+          <div className="container footer-inner">
+            <div>
+              <div style={{ fontWeight: 700, color: '#ffffff', fontSize: '1rem', marginBottom: '0.25rem' }}>
+                TravelGenie &bull; Enterprise Destination Planner
+              </div>
+              <p className="footer-disclaimer">
+                Tailored destination intelligence, accommodations, culinary heritage, activities, and day-by-day schedules. Powered by Google Gemini AI. All recommendations and budget calculations are advisory estimates.
+              </p>
+            </div>
+            <div>
+              <div className="footer-links-group">
+                <a href="/" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/'); }}>Home Planner</a>
+                <span className="footer-link-divider">&bull;</span>
+                <a href="/privacy" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/privacy'); }}>Privacy Policy</a>
+                <span className="footer-link-divider">&bull;</span>
+                <a href="/terms" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/terms'); }}>User Agreement</a>
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                &copy; {new Date().getFullYear()} TravelGenie. All rights reserved.
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
   // Render Public Privacy Policy Page (/privacy)
   if (normalizedRoute === '/privacy') {
     return (
@@ -299,6 +358,7 @@ export function App() {
             setOpenedSavedItinerary(null);
             setDetailError(null);
           }}
+          onOpenAuth={() => navigate('/signin')}
         />
         <PrivacyPolicy
           onNavigateHome={() => navigate('/')}
@@ -350,6 +410,7 @@ export function App() {
             setOpenedSavedItinerary(null);
             setDetailError(null);
           }}
+          onOpenAuth={() => navigate('/signin')}
         />
         <TermsOfService
           onNavigateHome={() => navigate('/')}
@@ -400,86 +461,117 @@ export function App() {
           setOpenedSavedItinerary(null);
           setDetailError(null);
         }}
+        onOpenAuth={() => navigate('/signin')}
       />
 
       <main id="main-content" tabIndex={-1}>
-        {!currentPlan && !openedSavedItinerary && <HeroLanding onPlanClick={scrollToForm} />}
-
-        {!openedSavedItinerary && (
-          <div id="travel-form-section">
-            <TravelForm
-              onSubmit={handleGeneratePlan}
-              isLoading={isLoading}
-              errorMessage={errorMessage}
-              onDismissError={() => setErrorMessage(null)}
-            />
-          </div>
+        {!currentPlan && !openedSavedItinerary && (
+          <HeroLanding onPlanClick={user ? scrollToForm : () => navigate('/signin')} />
         )}
 
-        {user && !openedSavedItinerary && (
-          <div id="previous-itineraries-section">
-            <PreviousItineraries
-              itineraries={savedItineraries}
-              isLoading={isLoadingHistory}
-              error={historyError}
-              onSelectItinerary={handleSelectPreviousItinerary}
-              loadingId={loadingDetailId}
-            />
-          </div>
-        )}
-
-        {detailError && !openedSavedItinerary && (
-          <div className="container" style={{ marginBottom: '1.5rem' }}>
-            <div className="alert-box alert-error" role="alert">
-              {detailError}
+        {!user ? (
+          /* UNAUTHENTICATED USER: Show ONLY centered authentication Call-To-Action */
+          <section className="auth-cta-section" id="auth-cta-section" aria-label="Member Sign In">
+            <div className="container">
+              <div className="auth-cta-card">
+                <div className="auth-cta-badge">Member Access Required</div>
+                <h2 className="auth-cta-heading">Ready to Plan Your Next Journey?</h2>
+                <p className="auth-cta-subtext">
+                  Sign up or log in to create custom day-by-day itineraries, estimate budgets in INR, and save your trip history.
+                </p>
+                <div>
+                  <button
+                    type="button"
+                    className="auth-cta-btn"
+                    onClick={() => navigate('/signin')}
+                    id="auth-cta-button"
+                  >
+                    Sign Up / Log In
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-
-        {openedSavedItinerary ? (
-          <div>
-            <PlanResult
-              plan={openedSavedItinerary.plan}
-              tripDetails={{
-                destination: openedSavedItinerary.destination,
-                numberOfDays: openedSavedItinerary.numberOfDays,
-                budgetInr: openedSavedItinerary.budgetInr,
-                numberOfTravellers: openedSavedItinerary.numberOfTravellers,
-                interests: openedSavedItinerary.interests,
-                accommodationPreference: openedSavedItinerary.accommodationPreference,
-                activityLevel: openedSavedItinerary.activityLevel,
-                additionalNotes: openedSavedItinerary.additionalNotes || ''
-              }}
-              isDemo={false}
-              onModify={handleModifyOpenedPlan}
-              isModifying={isModifying}
-              modifyError={modifyError}
-              onPlanAnother={() => {
-                setOpenedSavedItinerary(null);
-                scrollToForm();
-              }}
-              showModifiedSuccess={showModifiedSuccess}
-              onDismissSuccess={() => setShowModifiedSuccess(false)}
-              onBackToHistory={handleBackToHistory}
-            />
-          </div>
+          </section>
         ) : (
-          currentPlan && currentTripDetails && (
-            <div>
-              <PlanResult
-                plan={currentPlan}
-                tripDetails={currentTripDetails}
-                isDemo={isDemoPlan}
-                planMessage={planMessage}
-                onModify={handleModifyPlan}
-                isModifying={isModifying}
-                modifyError={modifyError}
-                onPlanAnother={scrollToForm}
-                showModifiedSuccess={showModifiedSuccess}
-                onDismissSuccess={() => setShowModifiedSuccess(false)}
-              />
-            </div>
-          )
+          /* AUTHENTICATED USER: Show existing itinerary form, history, and results */
+          <>
+            {!openedSavedItinerary && (
+              <div id="travel-form-section">
+                <TravelForm
+                  onSubmit={handleGeneratePlan}
+                  isLoading={isLoading}
+                  errorMessage={errorMessage}
+                  onDismissError={() => setErrorMessage(null)}
+                />
+              </div>
+            )}
+
+            {!openedSavedItinerary && (
+              <div id="previous-itineraries-section">
+                <PreviousItineraries
+                  itineraries={savedItineraries}
+                  isLoading={isLoadingHistory}
+                  error={historyError}
+                  onSelectItinerary={handleSelectPreviousItinerary}
+                  loadingId={loadingDetailId}
+                />
+              </div>
+            )}
+
+            {detailError && !openedSavedItinerary && (
+              <div className="container" style={{ marginBottom: '1.5rem' }}>
+                <div className="alert-box alert-error" role="alert">
+                  {detailError}
+                </div>
+              </div>
+            )}
+
+            {openedSavedItinerary ? (
+              <div>
+                <PlanResult
+                  plan={openedSavedItinerary.plan}
+                  tripDetails={{
+                    destination: openedSavedItinerary.destination,
+                    numberOfDays: openedSavedItinerary.numberOfDays,
+                    budgetInr: openedSavedItinerary.budgetInr,
+                    numberOfTravellers: openedSavedItinerary.numberOfTravellers,
+                    interests: openedSavedItinerary.interests,
+                    accommodationPreference: openedSavedItinerary.accommodationPreference,
+                    activityLevel: openedSavedItinerary.activityLevel,
+                    additionalNotes: openedSavedItinerary.additionalNotes || ''
+                  }}
+                  isDemo={false}
+                  onModify={handleModifyOpenedPlan}
+                  isModifying={isModifying}
+                  modifyError={modifyError}
+                  onPlanAnother={() => {
+                    setOpenedSavedItinerary(null);
+                    scrollToForm();
+                  }}
+                  showModifiedSuccess={showModifiedSuccess}
+                  onDismissSuccess={() => setShowModifiedSuccess(false)}
+                  onBackToHistory={handleBackToHistory}
+                />
+              </div>
+            ) : (
+              currentPlan && currentTripDetails && (
+                <div>
+                  <PlanResult
+                    plan={currentPlan}
+                    tripDetails={currentTripDetails}
+                    isDemo={isDemoPlan}
+                    planMessage={planMessage}
+                    onModify={handleModifyPlan}
+                    isModifying={isModifying}
+                    modifyError={modifyError}
+                    onPlanAnother={scrollToForm}
+                    showModifiedSuccess={showModifiedSuccess}
+                    onDismissSuccess={() => setShowModifiedSuccess(false)}
+                  />
+                </div>
+              )
+            )}
+          </>
         )}
       </main>
 
