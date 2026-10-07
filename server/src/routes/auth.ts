@@ -78,8 +78,21 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
         place: user.place
       }
     });
-  } catch (error) {
-    console.error('[Signup Route Error]:', error);
+  } catch (error: any) {
+    console.error('[Signup Route Error]:', {
+      message: error?.message || String(error),
+      code: error?.code,
+      detail: error?.detail,
+      column: error?.column,
+      table: error?.table,
+      constraint: error?.constraint
+    });
+
+    if (error?.code === '23505') {
+      res.status(409).json({ error: 'Username is already taken. Please choose another.' });
+      return;
+    }
+
     res.status(500).json({ error: 'Failed to create account. Please try again later.' });
   }
 });
@@ -142,8 +155,12 @@ router.post('/signin', async (req: Request, res: Response): Promise<void> => {
         place: user.place
       }
     });
-  } catch (error) {
-    console.error('[Signin Route Error]:', error);
+  } catch (error: any) {
+    console.error('[Signin Route Error]:', {
+      message: error?.message || String(error),
+      code: error?.code,
+      detail: error?.detail
+    });
     res.status(500).json({ error: 'Failed to sign in. Please try again later.' });
   }
 });
