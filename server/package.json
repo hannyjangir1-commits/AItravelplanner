@@ -6,9 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/db/migrations', {recursive:true}); if(fs.existsSync('src/db/schema.sql')) fs.copyFileSync('src/db/schema.sql', 'dist/db/schema.sql'); if(fs.existsSync('src/db/migrations')) for(const f of fs.readdirSync('src/db/migrations')) fs.copyFileSync('src/db/migrations/'+f, 'dist/db/migrations/'+f);\"",
     "start": "node dist/index.js",
-    "db:init": "tsx src/db/init.ts"
+    "db:init": "node dist/db/init.js"
   },
   "dependencies": {
     "@types/compression": "^1.8.1",
