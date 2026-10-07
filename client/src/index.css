@@ -267,6 +267,39 @@ textarea:focus-visible,
   border-color: #ffffff;
 }
 
+.btn-google-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  background-color: #ffffff;
+  color: #1e293b;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  padding: 0.45rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+}
+
+.btn-google-login:hover {
+  background-color: #f8fafc;
+  border-color: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn-google-login:active {
+  transform: translateY(0);
+}
+
+.btn-google-login:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
 /* ==========================================================================
    HERO / BANNER SECTION
    ========================================================================== */
@@ -1889,7 +1922,8 @@ textarea:focus-visible,
   .brand-tagline {
     display: none;
   }
-  .btn-nav-action {
+  .btn-nav-action,
+  .btn-google-login {
     padding: 0.35rem 0.65rem;
     font-size: 0.78rem;
   }
@@ -1977,6 +2011,7 @@ textarea:focus-visible,
   .btn-alert-close,
   .btn-action-outline,
   .btn-nav-action,
+  .btn-google-login,
   .error-panel-header,
   .form-error-panel,
   .prompt-pill-btn,
