@@ -50,3 +50,18 @@ export interface ModifyPlanRequest {
   currentPlan: TravelPlan;
   modificationRequest: string;
 }
+
+export interface AuthenticatedUser {
+  userId: string;
+  email: string | null;
+  name: string | null;
+  profilePicture: string | null;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string | null;
+  name: string | null;
+  profilePicture: string | null;
+  place: string | null;
+}
