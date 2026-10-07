@@ -9,11 +9,13 @@ const __dirname = path.dirname(__filename);
 /**
  * Finds the schema.sql file across common development and compiled directory layouts.
  */
-function findSchemaSqlPath(): string {
+function findSchemaSqlPath(): string | null {
   const candidatePaths = [
     path.resolve(__dirname, 'schema.sql'),
     path.resolve(__dirname, '../../src/db/schema.sql'),
+    path.resolve(process.cwd(), 'dist/db/schema.sql'),
     path.resolve(process.cwd(), 'src/db/schema.sql'),
+    path.resolve(process.cwd(), 'server/dist/db/schema.sql'),
     path.resolve(process.cwd(), 'server/src/db/schema.sql')
   ];
 
@@ -23,7 +25,7 @@ function findSchemaSqlPath(): string {
     }
   }
 
-  throw new Error(`schema.sql not found in candidate paths: ${candidatePaths.join(', ')}`);
+  return null;
 }
 
 /**
@@ -33,7 +35,9 @@ function findMigrationsDirPath(): string | null {
   const candidatePaths = [
     path.resolve(__dirname, 'migrations'),
     path.resolve(__dirname, '../../src/db/migrations'),
+    path.resolve(process.cwd(), 'dist/db/migrations'),
     path.resolve(process.cwd(), 'src/db/migrations'),
+    path.resolve(process.cwd(), 'server/dist/db/migrations'),
     path.resolve(process.cwd(), 'server/src/db/migrations')
   ];
 
@@ -47,111 +51,180 @@ function findMigrationsDirPath(): string | null {
 }
 
 /**
- * Initializes the PostgreSQL database schema for TravelGenie.
- * Applies schema.sql and migrations safely without dropping existing tables or data.
+ * Core idempotent SQL migration statements guaranteed to run even in minimal Docker
+ * or server environments where raw .sql files might not be on disk.
  */
-export async function initDatabase(): Promise<{ success: boolean; message: string }> {
-  console.log('[DB Init] Starting TravelGenie database initialization...');
+const FALLBACK_SCHEMA_SQL = `
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username VARCHAR(255) UNIQUE,
+    password_hash TEXT,
+    google_id VARCHAR(255) UNIQUE,
+    name VARCHAR(255),
+    email VARCHAR(255) UNIQUE,
+    profile_picture TEXT,
+    place VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS travel_plans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    destination VARCHAR(255) NOT NULL,
+    number_of_days INTEGER NOT NULL,
+    budget_inr NUMERIC NOT NULL,
+    number_of_travellers INTEGER NOT NULL,
+    interests JSONB NOT NULL,
+    accommodation_preference VARCHAR(50) NOT NULL,
+    activity_level VARCHAR(50) NOT NULL,
+    additional_notes TEXT,
+    plan_data JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Idempotent column additions for existing tables
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS place VARCHAR(255);
+
+-- Idempotent index creation
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_travel_plans_user_id ON travel_plans(user_id);
+CREATE INDEX IF NOT EXISTS idx_travel_plans_created_at ON travel_plans(created_at DESC);
+`;
+
+/**
+ * Automatically executed on server startup when DATABASE_URL is present.
+ * Ensures the database schema is complete, valid, and up-to-date with all migrations.
+ * Does NOT terminate the connection pool so the server can proceed normally.
+ */
+export async function runStartupMigrations(): Promise<{ success: boolean; message: string }> {
   if (!process.env.DATABASE_URL) {
-    const msg = '[DB Init] DATABASE_URL is not configured. Schema execution skipped. To apply schema to a live database, set DATABASE_URL and run this script again.';
-    console.warn(msg);
-    return { success: false, message: msg };
+    const msg = '[DB Startup] DATABASE_URL is not configured. Database migrations skipped.';
+    console.log(msg);
+    return { success: true, message: msg };
   }
 
-  const schemaPath = findSchemaSqlPath();
-  console.log(`[DB Init] Reading SQL schema from: ${schemaPath}`);
-  const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
+  console.log('[DB Startup] Connecting to PostgreSQL to verify database schema and migrations...');
 
-  const migrationsDir = findMigrationsDirPath();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (connErr: any) {
+    console.error('[DB Startup] Connection failed:', connErr?.message || connErr);
+    return {
+      success: false,
+      message: `Database connection failed: ${connErr?.message || connErr}`
+    };
+  }
 
   try {
-    const client = await pool.connect();
-    try {
-      console.log('[DB Init] Applying schema and migrations to PostgreSQL database...');
-      await client.query('BEGIN');
+    await client.query('BEGIN');
+
+    // 1. Check for schema.sql on disk or use embedded fallback
+    const schemaPath = findSchemaSqlPath();
+    if (schemaPath) {
+      console.log(`[DB Startup] Applying SQL schema from file: ${schemaPath}`);
+      const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
       await client.query(schemaSql);
-
-      // Apply any migration files in alphabetical order
-      if (migrationsDir) {
-        const migrationFiles = fs.readdirSync(migrationsDir)
-          .filter((file) => file.endsWith('.sql'))
-          .sort();
-
-        for (const file of migrationFiles) {
-          const filePath = path.join(migrationsDir, file);
-          console.log(`[DB Init] Applying migration: ${file}`);
-          const migrationSql = fs.readFileSync(filePath, 'utf-8');
-          await client.query(migrationSql);
-        }
-      }
-
-      await client.query('COMMIT');
-      console.log('[DB Init] Schema and migrations executed successfully.');
-
-      // Verification: Check if tables exist
-      const tableCheck = await client.query(`
-        SELECT table_name 
-        FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-          AND table_name IN ('users', 'travel_plans')
-        ORDER BY table_name;
-      `);
-      const existingTables = tableCheck.rows.map((r: { table_name: string }) => r.table_name);
-      console.log(`[DB Init] Verified tables in database: ${existingTables.join(', ')}`);
-
-      // Verification: Check columns on users table
-      const columnCheck = await client.query(`
-        SELECT column_name, data_type, is_nullable
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'users'
-        ORDER BY ordinal_position;
-      `);
-      console.log(`[DB Init] Verified users columns:`, columnCheck.rows.map((r: { column_name: string }) => r.column_name));
-
-      // Verification: Check foreign keys
-      const fkCheck = await client.query(`
-        SELECT tc.constraint_name, tc.table_name, kcu.column_name, ccu.table_name AS foreign_table_name
-        FROM information_schema.table_constraints AS tc
-        JOIN information_schema.key_column_usage AS kcu
-          ON tc.constraint_name = kcu.constraint_name
-        JOIN information_schema.constraint_column_usage AS ccu
-          ON ccu.constraint_name = tc.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_name = 'travel_plans';
-      `);
-      console.log(`[DB Init] Verified foreign keys on travel_plans:`, fkCheck.rows);
-
-      // Verification: Check indexes
-      const indexCheck = await client.query(`
-        SELECT indexname, tablename 
-        FROM pg_indexes 
-        WHERE tablename IN ('users', 'travel_plans')
-        ORDER BY tablename, indexname;
-      `);
-      console.log(`[DB Init] Verified indexes:`, indexCheck.rows.map((r: { indexname: string; tablename: string }) => `${r.tablename}.${r.indexname}`));
-
-      return {
-        success: true,
-        message: `Database initialized successfully. Verified tables: ${existingTables.join(', ')}`
-      };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+    } else {
+      console.log('[DB Startup] Applying embedded core schema and migrations...');
+      await client.query(FALLBACK_SCHEMA_SQL);
     }
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error('[DB Init] Failed to initialize database schema:', errorMsg);
-    return { success: false, message: errorMsg };
+
+    // 2. Check for disk migrations directory
+    const migrationsDir = findMigrationsDirPath();
+    if (migrationsDir) {
+      const migrationFiles = fs.readdirSync(migrationsDir)
+        .filter((file) => file.endsWith('.sql'))
+        .sort();
+
+      for (const file of migrationFiles) {
+        const filePath = path.join(migrationsDir, file);
+        console.log(`[DB Startup] Applying migration: ${file}`);
+        const migrationSql = fs.readFileSync(filePath, 'utf-8');
+        await client.query(migrationSql);
+      }
+    }
+
+    // 3. Guarantee that username and password_hash columns exist on users
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS place VARCHAR(255);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique ON users(username);
+      CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+    `);
+
+    await client.query('COMMIT');
+    console.log('[DB Startup] Schema and migrations applied successfully.');
+
+    // 4. Verify columns in users table
+    const colCheck = await client.query(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'users'
+      ORDER BY ordinal_position;
+    `);
+
+    const userCols = colCheck.rows.map((r: { column_name: string }) => r.column_name);
+    console.log('[DB Startup] Verified users table columns:', userCols.join(', '));
+
+    const hasUsername = userCols.includes('username');
+    const hasPasswordHash = userCols.includes('password_hash');
+
+    if (!hasUsername || !hasPasswordHash) {
+      console.error('[DB Startup Error] Missing required columns in users table!', {
+        hasUsername,
+        hasPasswordHash
+      });
+      return {
+        success: false,
+        message: 'Missing username or password_hash in users table.'
+      };
+    }
+
+    return {
+      success: true,
+      message: `Database ready. Verified columns on users: ${userCols.join(', ')}`
+    };
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('[DB Startup Migration Error]:', {
+      message: err?.message,
+      code: err?.code,
+      detail: err?.detail
+    });
+    return {
+      success: false,
+      message: err?.message || String(err)
+    };
   } finally {
-    await pool.end();
+    client.release();
   }
 }
 
-// Automatically execute if run directly via CLI (e.g. tsx src/db/init.ts)
+/**
+ * Initializes the PostgreSQL database schema for TravelGenie.
+ * Applies schema and migrations safely without dropping existing tables or data.
+ * @param options.closePool If true, closes the pool upon completion (CLI mode).
+ */
+export async function initDatabase(options: { closePool?: boolean } = {}): Promise<{ success: boolean; message: string }> {
+  try {
+    return await runStartupMigrations();
+  } finally {
+    if (options.closePool) {
+      await pool.end();
+    }
+  }
+}
+
+// Automatically execute if run directly via CLI (e.g. node dist/db/init.js or tsx src/db/init.ts)
 const isDirectExecution = process.argv[1] && (
   path.resolve(process.argv[1]) === path.resolve(__filename) ||
   process.argv[1].endsWith('init.ts') ||
@@ -159,7 +232,7 @@ const isDirectExecution = process.argv[1] && (
 );
 
 if (isDirectExecution) {
-  initDatabase()
+  initDatabase({ closePool: true })
     .then((result) => {
       if (!result.success && process.env.DATABASE_URL) {
         process.exit(1);
