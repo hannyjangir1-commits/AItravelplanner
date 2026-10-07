@@ -3,9 +3,7 @@ import { getAuthConfig } from './config.js';
 
 export interface AuthenticatedUserPayload {
   userId: string;
-  email: string | null;
-  name: string | null;
-  profilePicture: string | null;
+  username: string;
 }
 
 const JWT_EXPIRATION = '7d';
@@ -13,17 +11,14 @@ const JWT_EXPIRATION = '7d';
 /**
  * Signs an authenticated user payload into a secure JWT.
  * Expiration is set to 7 days.
- * Payload contains only minimal identity fields (userId, email, name, profilePicture).
- * Never contains Google access tokens or secrets.
+ * Payload contains minimal identity fields (userId, username).
  */
 export function signAuthToken(payload: AuthenticatedUserPayload): string {
   const { jwtSecret } = getAuthConfig();
   return jwt.sign(
     {
       userId: payload.userId,
-      email: payload.email,
-      name: payload.name,
-      profilePicture: payload.profilePicture
+      username: payload.username
     },
     jwtSecret,
     { expiresIn: JWT_EXPIRATION }
@@ -45,12 +40,9 @@ export function verifyAuthToken(token: string): AuthenticatedUserPayload | null 
 
     return {
       userId: decoded.userId,
-      email: typeof decoded.email === 'string' ? decoded.email : null,
-      name: typeof decoded.name === 'string' ? decoded.name : null,
-      profilePicture: typeof decoded.profilePicture === 'string' ? decoded.profilePicture : null
+      username: typeof decoded.username === 'string' ? decoded.username : ''
     };
   } catch {
-    // Safely reject invalid/expired/tampered tokens without leaking internal errors
     return null;
   }
 }
