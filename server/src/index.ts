@@ -12,7 +12,7 @@ import { testDbConnection } from './db.js';
 import authRouter from './routes/auth.js';
 import { optionalAuth, requireAuth } from './middleware/auth.js';
 import { saveTravelPlan, getTravelPlansByUserId, getTravelPlanByIdForUser } from './db/travelPlans.js';
-import { runStartupMigrations } from './db/init.js';
+import { runStartupMigrations, checkDbHealth } from './db/init.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -156,23 +156,16 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
-// Database health check endpoint
+// Safe database health check endpoint
 app.get('/api/db-health', async (_req: Request, res: Response) => {
-  const isConnected = await testDbConnection();
-  if (isConnected) {
-    res.json({
-      success: true,
-      status: 'ok',
-      database: 'connected'
-    });
-  } else {
-    res.status(503).json({
-      success: false,
-      status: 'error',
-      database: 'disconnected',
-      error: 'Unable to connect to the database.'
-    });
-  }
+  const health = await checkDbHealth();
+  const statusCode = health.success ? 200 : 503;
+  res.status(statusCode).json({
+    success: health.success,
+    database: health.database,
+    schemaReady: health.schemaReady,
+    requiredColumns: health.requiredColumns
+  });
 });
 
 // Authentication routes (Username/password authentication flow)
@@ -332,20 +325,32 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`AI Travel Agent server running on http://localhost:${PORT}`);
-  if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here') {
-    console.log('Notice: GEMINI_API_KEY is not set in server/.env. Demo fallback mode is enabled.');
+async function startServer(): Promise<void> {
+  // If DATABASE_URL is configured, initialize database schema BEFORE starting HTTP server
+  if (process.env.DATABASE_URL) {
+    console.log('[Startup] DATABASE_URL detected. Initializing database schema and migrations...');
+    const migrationResult = await runStartupMigrations();
+    if (!migrationResult.success) {
+      console.error('[Startup Fatal Error] Database schema initialization failed:', migrationResult.message);
+      console.error('[Startup Fatal Error] HTTP server will NOT start because the database is not ready.');
+      process.exit(1);
+    }
+    console.log('[Startup] Database schema verified successfully.');
   } else {
-    console.log('Gemini API key detected.');
+    console.log('[Notice] DATABASE_URL is not set. Demo/fallback mode is enabled. Database migrations skipped.');
   }
 
-  // Automatic startup database migration and schema verification
-  if (process.env.DATABASE_URL) {
-    runStartupMigrations().catch((err) => {
-      console.error('[DB Startup Migration Error]:', err?.message || err);
-    });
-  } else {
-    console.log('[DB] DATABASE_URL is not set. Database migrations skipped.');
-  }
+  app.listen(PORT, () => {
+    console.log(`AI Travel Agent server running on http://localhost:${PORT}`);
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here') {
+      console.log('Notice: GEMINI_API_KEY is not set in server/.env. Demo fallback mode is enabled.');
+    } else {
+      console.log('Gemini API key detected.');
+    }
+  });
+}
+
+startServer().catch((fatalErr) => {
+  console.error('[Server Fatal Error]:', fatalErr?.message || fatalErr);
+  process.exit(1);
 });
