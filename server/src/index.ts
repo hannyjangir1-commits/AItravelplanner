@@ -12,6 +12,7 @@ import { testDbConnection } from './db.js';
 import authRouter from './routes/auth.js';
 import { optionalAuth, requireAuth } from './middleware/auth.js';
 import { saveTravelPlan, getTravelPlansByUserId, getTravelPlanByIdForUser } from './db/travelPlans.js';
+import { runStartupMigrations } from './db/init.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -337,5 +338,14 @@ app.listen(PORT, () => {
     console.log('Notice: GEMINI_API_KEY is not set in server/.env. Demo fallback mode is enabled.');
   } else {
     console.log('Gemini API key detected.');
+  }
+
+  // Automatic startup database migration and schema verification
+  if (process.env.DATABASE_URL) {
+    runStartupMigrations().catch((err) => {
+      console.error('[DB Startup Migration Error]:', err?.message || err);
+    });
+  } else {
+    console.log('[DB] DATABASE_URL is not set. Database migrations skipped.');
   }
 });
