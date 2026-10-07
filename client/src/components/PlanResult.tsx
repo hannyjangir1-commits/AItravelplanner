@@ -233,6 +233,7 @@ interface PlanResultProps {
   onPlanAnother: () => void;
   showModifiedSuccess?: boolean;
   onDismissSuccess?: () => void;
+  onBackToHistory?: () => void;
 }
 
 /**
@@ -272,7 +273,8 @@ export const PlanResult: React.FC<PlanResultProps> = ({
   modifyError,
   onPlanAnother,
   showModifiedSuccess,
-  onDismissSuccess
+  onDismissSuccess,
+  onBackToHistory
 }) => {
   const totalDays = Number(tripDetails.numberOfDays) || 1;
   const travellers = Number(tripDetails.numberOfTravellers) || 1;
@@ -283,6 +285,23 @@ export const PlanResult: React.FC<PlanResultProps> = ({
   return (
     <section className="results-dashboard" id="plan-results">
       <div className="container">
+        {onBackToHistory && (
+          <div className="back-to-history-bar">
+            <button
+              type="button"
+              className="btn-back-history"
+              onClick={onBackToHistory}
+              aria-label="Back to Previous Itineraries"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                <line x1="19" y1="12" x2="5" y2="12"></line>
+                <polyline points="12 19 5 12 12 5"></polyline>
+              </svg>
+              <span>Back to Previous Itineraries</span>
+            </button>
+          </div>
+        )}
+
         {/* Modification Banner */}
         {showModifiedSuccess && (
           <div className={`alert-box ${isDemo ? 'alert-info' : 'alert-success'}`} role="status" aria-live="polite">
