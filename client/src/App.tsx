@@ -6,6 +6,8 @@ import { HeroLanding } from './components/HeroLanding';
 import { TravelForm } from './components/TravelForm';
 import { PlanResult } from './components/PlanResult';
 import { PreviousItineraries } from './components/PreviousItineraries';
+import { PrivacyPolicy } from './components/PrivacyPolicy';
+import { TermsOfService } from './components/TermsOfService';
 
 import {
   loadStoredSession,
@@ -22,6 +24,23 @@ export function App() {
   const [currentTripDetails, setCurrentTripDetails] = useState<TripFormData | null>(initialSession.details);
   const [isDemoPlan, setIsDemoPlan] = useState<boolean>(initialSession.isDemo);
   const [planMessage, setPlanMessage] = useState<string | null>(initialSession.message);
+
+  // Client-side routing state for public legal pages (/privacy, /terms)
+  const [currentRoute, setCurrentRoute] = useState<string>(() => window.location.pathname);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentRoute(window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigate = (path: string) => {
+    window.history.pushState({}, '', path);
+    setCurrentRoute(path);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   // Previous Itineraries state
   const [savedItineraries, setSavedItineraries] = useState<ItinerarySummary[]>([]);
@@ -252,9 +271,119 @@ export function App() {
     setErrorMessage(null);
     setModifyError(null);
     setShowModifiedSuccess(false);
-    scrollToForm();
+    const norm = currentRoute.replace(/\/+$/, '') || '/';
+    if (norm !== '/') {
+      navigate('/');
+    } else {
+      scrollToForm();
+    }
   };
 
+  const normalizedRoute = currentRoute.replace(/\/+$/, '') || '/';
+
+  // Render Public Privacy Policy Page (/privacy)
+  if (normalizedRoute === '/privacy') {
+    return (
+      <div className="app-layout" id="top">
+        <a href="#main-content" className="skip-to-content-link">
+          Skip to main content
+        </a>
+        <Header
+          onNewPlan={handleStartNewPlan}
+          hasPlan={false}
+          user={user}
+          onUpdateUser={setUser}
+          onLogout={() => {
+            setUser(null);
+            setSavedItineraries([]);
+            setOpenedSavedItinerary(null);
+            setDetailError(null);
+          }}
+        />
+        <PrivacyPolicy
+          onNavigateHome={() => navigate('/')}
+          onNavigateTerms={() => navigate('/terms')}
+        />
+        <footer className="enterprise-footer">
+          <div className="container footer-inner">
+            <div>
+              <div style={{ fontWeight: 700, color: '#ffffff', fontSize: '1rem', marginBottom: '0.25rem' }}>
+                TravelGenie &bull; Enterprise Destination Planner
+              </div>
+              <p className="footer-disclaimer">
+                Tailored destination intelligence, accommodations, culinary heritage, activities, and day-by-day schedules. Powered by Google Gemini AI. All recommendations and budget calculations are advisory estimates.
+              </p>
+            </div>
+            <div>
+              <div className="footer-links-group">
+                <a href="/" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/'); }}>Home Planner</a>
+                <span className="footer-link-divider">&bull;</span>
+                <span className="footer-link-active">Privacy Policy</span>
+                <span className="footer-link-divider">&bull;</span>
+                <a href="/terms" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/terms'); }}>User Agreement</a>
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                &copy; {new Date().getFullYear()} TravelGenie. All rights reserved.
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
+  // Render Public User Agreement / Terms of Service Page (/terms)
+  if (normalizedRoute === '/terms') {
+    return (
+      <div className="app-layout" id="top">
+        <a href="#main-content" className="skip-to-content-link">
+          Skip to main content
+        </a>
+        <Header
+          onNewPlan={handleStartNewPlan}
+          hasPlan={false}
+          user={user}
+          onUpdateUser={setUser}
+          onLogout={() => {
+            setUser(null);
+            setSavedItineraries([]);
+            setOpenedSavedItinerary(null);
+            setDetailError(null);
+          }}
+        />
+        <TermsOfService
+          onNavigateHome={() => navigate('/')}
+          onNavigatePrivacy={() => navigate('/privacy')}
+        />
+        <footer className="enterprise-footer">
+          <div className="container footer-inner">
+            <div>
+              <div style={{ fontWeight: 700, color: '#ffffff', fontSize: '1rem', marginBottom: '0.25rem' }}>
+                TravelGenie &bull; Enterprise Destination Planner
+              </div>
+              <p className="footer-disclaimer">
+                Tailored destination intelligence, accommodations, culinary heritage, activities, and day-by-day schedules. Powered by Google Gemini AI. All recommendations and budget calculations are advisory estimates.
+              </p>
+            </div>
+            <div>
+              <div className="footer-links-group">
+                <a href="/" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/'); }}>Home Planner</a>
+                <span className="footer-link-divider">&bull;</span>
+                <a href="/privacy" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/privacy'); }}>Privacy Policy</a>
+                <span className="footer-link-divider">&bull;</span>
+                <span className="footer-link-active">User Agreement</span>
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                &copy; {new Date().getFullYear()} TravelGenie. All rights reserved.
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
+  // Main Planner View
   return (
     <div className="app-layout" id="top">
       <a href="#main-content" className="skip-to-content-link">
@@ -364,8 +493,15 @@ export function App() {
               Tailored destination intelligence, accommodations, culinary heritage, activities, and day-by-day schedules.{isDemoPlan ? ' Currently displaying demo fallback plan.' : ' Powered by Google Gemini AI.'} All recommendations and budget calculations are advisory estimates.
             </p>
           </div>
-          <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-            &copy; {new Date().getFullYear()} TravelGenie. All rights reserved.
+          <div>
+            <div className="footer-links-group">
+              <a href="/privacy" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/privacy'); }}>Privacy Policy</a>
+              <span className="footer-link-divider">&bull;</span>
+              <a href="/terms" className="footer-link" onClick={(e) => { e.preventDefault(); navigate('/terms'); }}>User Agreement</a>
+            </div>
+            <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+              &copy; {new Date().getFullYear()} TravelGenie. All rights reserved.
+            </div>
           </div>
         </div>
       </footer>
