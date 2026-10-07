@@ -41,9 +41,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
     req.user = {
       userId: payload.userId,
-      email: payload.email,
-      name: payload.name,
-      profilePicture: payload.profilePicture
+      username: payload.username
     };
 
     next();
@@ -77,9 +75,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
       if (payload && payload.userId) {
         req.user = {
           userId: payload.userId,
-          email: payload.email,
-          name: payload.name,
-          profilePicture: payload.profilePicture
+          username: payload.username
         };
       }
     }
