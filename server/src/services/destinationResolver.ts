@@ -102,6 +102,11 @@ export async function resolveDestination(
 
   const canonicalName = deriveCanonicalName(geocode.formattedAddress, geocode.addressComponents);
 
+  console.log(
+    `[DestinationResolver Diagnostics] Query="${cleanInput}" -> Canonical="${canonicalName}", ` +
+    `Coords=(${geocode.latitude.toFixed(4)}, ${geocode.longitude.toFixed(4)}), Address="${geocode.formattedAddress}"`
+  );
+
   return {
     originalInput: cleanInput,
     canonicalName,

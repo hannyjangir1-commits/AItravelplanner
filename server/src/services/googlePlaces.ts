@@ -459,6 +459,11 @@ export async function searchPlacesNearby(
     requestBody.includedTypes = params.includedTypes;
   }
 
+  console.log(
+    `[GooglePlaces Diagnostics] searchPlacesNearby: center=(${params.coordinates.latitude.toFixed(4)}, ${params.coordinates.longitude.toFixed(4)}), ` +
+    `radius=${radius}m, maxResults=${maxResults}, includedTypes=[${params.includedTypes?.join(', ') || 'none'}]`
+  );
+
   let response: Response;
   try {
     const combinedSignal = options.signal
@@ -485,9 +490,12 @@ export async function searchPlacesNearby(
   if (!response.ok) {
     const status = response.status;
     if (status === 429) {
+      console.warn('[GooglePlaces Diagnostics] searchPlacesNearby HTTP 429: Rate limit exceeded.');
       throw new GooglePlacesRateLimitError();
     }
     const rawError = await response.text().catch(() => '');
+    const sanitizedError = redactApiKey(rawError.slice(0, 300), apiKey);
+    console.warn(`[GooglePlaces Diagnostics] searchPlacesNearby HTTP ${status} error: ${sanitizedError}`);
     throw new GooglePlacesRequestError(
       redactApiKey(`searchPlacesNearby HTTP error ${status}: ${rawError.slice(0, 200)}`, apiKey),
       status
@@ -501,12 +509,20 @@ export async function searchPlacesNearby(
     throw new GooglePlacesParseError(`Failed to parse searchPlacesNearby response as JSON: ${jsonErr.message}`);
   }
 
+  const rawPlaces = Array.isArray(data?.places) ? data.places : [];
+  const sampleNames = rawPlaces.slice(0, 3).map((p: any) => p.displayName?.text || p.name || 'unnamed').join(', ');
+  const sampleTypes = rawPlaces.slice(0, 2).map((p: any) => (p.types || []).slice(0, 3).join('/')).join('; ');
+  console.log(
+    `[GooglePlaces Diagnostics] searchPlacesNearby: HTTP 200 OK, rawCount=${rawPlaces.length}, ` +
+    `samplePlaces=[${sampleNames}], sampleTypes=[${sampleTypes}]`
+  );
+
   // Google Places (New) returns an empty object {} or { places: [] } if zero results found
-  if (!data || !Array.isArray(data.places) || data.places.length === 0) {
+  if (rawPlaces.length === 0) {
     return [];
   }
 
-  return data.places.map(normalizeGooglePlace);
+  return rawPlaces.map(normalizeGooglePlace);
 }
 
 /**
@@ -557,6 +573,12 @@ export async function searchPlacesByText(
     };
   }
 
+  console.log(
+    `[GooglePlaces Diagnostics] searchPlacesByText: query="${query}", ` +
+    `center=${params.center ? `(${params.center.latitude.toFixed(4)}, ${params.center.longitude.toFixed(4)})` : 'none'}, ` +
+    `radius=${params.radiusMeters || 'default'}m, maxResults=${maxResults}`
+  );
+
   let response: Response;
   try {
     const combinedSignal = options.signal
@@ -583,9 +605,12 @@ export async function searchPlacesByText(
   if (!response.ok) {
     const status = response.status;
     if (status === 429) {
+      console.warn('[GooglePlaces Diagnostics] searchPlacesByText HTTP 429: Rate limit exceeded.');
       throw new GooglePlacesRateLimitError();
     }
     const rawError = await response.text().catch(() => '');
+    const sanitizedError = redactApiKey(rawError.slice(0, 300), apiKey);
+    console.warn(`[GooglePlaces Diagnostics] searchPlacesByText HTTP ${status} error: ${sanitizedError}`);
     throw new GooglePlacesRequestError(
       redactApiKey(`searchPlacesByText HTTP error ${status}: ${rawError.slice(0, 200)}`, apiKey),
       status
@@ -599,9 +624,15 @@ export async function searchPlacesByText(
     throw new GooglePlacesParseError(`Failed to parse searchPlacesByText response as JSON: ${jsonErr.message}`);
   }
 
-  if (!data || !Array.isArray(data.places) || data.places.length === 0) {
+  const rawPlaces = Array.isArray(data?.places) ? data.places : [];
+  const sampleNames = rawPlaces.slice(0, 3).map((p: any) => p.displayName?.text || p.name || 'unnamed').join(', ');
+  console.log(
+    `[GooglePlaces Diagnostics] searchPlacesByText: HTTP 200 OK, rawCount=${rawPlaces.length}, samplePlaces=[${sampleNames}]`
+  );
+
+  if (rawPlaces.length === 0) {
     return [];
   }
 
-  return data.places.map(normalizeGooglePlace);
+  return rawPlaces.map(normalizeGooglePlace);
 }

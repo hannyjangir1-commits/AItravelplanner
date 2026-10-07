@@ -1117,6 +1117,13 @@ export async function generateTravelPlanService(
   options: GeneratePlanServiceOptions = {}
 ): Promise<{ plan: TravelPlan; isDemo: boolean; message?: string }> {
   // 1. Resolve destination to authoritative geographic search anchor
+  const isGoogleMapsConfigured = Boolean(
+    process.env.GOOGLE_MAPS_API_KEY &&
+    process.env.GOOGLE_MAPS_API_KEY.trim() &&
+    process.env.GOOGLE_MAPS_API_KEY !== 'your_google_maps_api_key_here'
+  );
+  console.log(`[Places Service Diagnostics] GOOGLE_MAPS_API_KEY is ${isGoogleMapsConfigured ? 'CONFIGURED' : 'NOT CONFIGURED'}.`);
+
   let resolvedDest: ResolvedDestination;
   if (options.catalogOverride) {
     resolvedDest = options.catalogOverride.destination;
@@ -1134,7 +1141,7 @@ export async function generateTravelPlanService(
         );
       }
       if (destErr instanceof GooglePlacesConfigError) {
-        console.warn('[Places Service] GOOGLE_MAPS_API_KEY not configured. Proceeding with ungrounded fallback notice.');
+        console.warn('[Places Service Diagnostics] GOOGLE_MAPS_API_KEY not configured. Proceeding with ungrounded fallback notice.');
         resolvedDest = {
           originalInput: request.destination,
           canonicalName: request.destination,
@@ -1159,7 +1166,7 @@ export async function generateTravelPlanService(
         fetchFn: options.fetchFn
       });
     } catch (catErr: any) {
-      console.warn('[Place Catalog] Failed to build catalog, proceeding with empty catalog:', catErr.message);
+      console.warn('[Place Catalog Diagnostics] Failed to build catalog, proceeding with empty catalog:', catErr.message);
       catalog = {
         destination: resolvedDest,
         places: [],
@@ -1175,6 +1182,13 @@ export async function generateTravelPlanService(
       metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0 }
     };
   }
+
+  console.log(
+    `[Places Service Diagnostics] Verified catalog ready for "${catalog.destination.canonicalName}": ` +
+    `totalVerified=${catalog.places.length} (Accom: ${catalog.byCategory.accommodation.length}, ` +
+    `Attr: ${catalog.byCategory.attraction.length}, Rest: ${catalog.byCategory.restaurant.length}, ` +
+    `Act: ${catalog.byCategory.activity.length})`
+  );
 
   // 3. Format verified catalog for prompt
   const formattedCatalog = formatCatalogForPrompt(catalog);

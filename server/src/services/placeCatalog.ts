@@ -68,8 +68,9 @@ export const ATTRACTION_PLACE_TYPES = [
   'museum',
   'historical_landmark',
   'park',
-  'place_of_worship',
   'hindu_temple',
+  'church',
+  'mosque',
   'national_park',
   'art_gallery'
 ];
@@ -291,7 +292,8 @@ async function searchCategoryWithExpansion(
   destinationAnchor: { latitude: number; longitude: number },
   searchFn: (radiusMeters: number) => Promise<InternalGooglePlace[]>,
   minTargetCount: number,
-  radii: number[]
+  radii: number[],
+  categoryName = 'places'
 ): Promise<InternalGooglePlace[]> {
   const seenPlaceIds = new Set<string>();
   const collectedPlaces: InternalGooglePlace[] = [];
@@ -304,15 +306,23 @@ async function searchCategoryWithExpansion(
 
     try {
       const placesAtRadius = await searchFn(radius);
+      const newlyAdded: string[] = [];
       for (const place of placesAtRadius) {
         if (place?.providerPlaceId && !seenPlaceIds.has(place.providerPlaceId)) {
           seenPlaceIds.add(place.providerPlaceId);
           collectedPlaces.push(place);
+          newlyAdded.push(place.name);
         }
       }
+      console.log(
+        `[PlaceCatalog Diagnostics] Category="${categoryName}", tier=${radius}m: ` +
+        `rawCount=${placesAtRadius.length}, newlyAdded=${newlyAdded.length}, cumulativeTotal=${collectedPlaces.length}. ` +
+        `Sample: [${newlyAdded.slice(0, 3).join(', ')}]`
+      );
     } catch (err) {
+      const safeErrorMsg = err instanceof Error ? err.message : String(err);
       // In case of an individual tier network blip, continue with existing collected places
-      console.warn(`[PlaceCatalog] Search tier at ${radius}m encountered error:`, err instanceof Error ? err.message : err);
+      console.warn(`[PlaceCatalog Diagnostics] Category="${categoryName}", tier=${radius}m ERROR: ${safeErrorMsg}`);
     }
   }
 
@@ -376,7 +386,8 @@ export async function buildVerifiedPlaceCatalog(
         requestOpts
       ),
     minAccom,
-    radii
+    radii,
+    'accommodation'
   );
 
   // --------------------------------------------------------------------------
@@ -394,7 +405,8 @@ export async function buildVerifiedPlaceCatalog(
         requestOpts
       ),
     minAttr,
-    radii
+    radii,
+    'attraction'
   );
 
   // --------------------------------------------------------------------------
@@ -412,7 +424,8 @@ export async function buildVerifiedPlaceCatalog(
         requestOpts
       ),
     minRest,
-    radii
+    radii,
+    'restaurant'
   );
 
   // --------------------------------------------------------------------------
@@ -459,7 +472,8 @@ export async function buildVerifiedPlaceCatalog(
       return nearbyActs;
     },
     minAct,
-    radii
+    radii,
+    'activity'
   );
 
   // --------------------------------------------------------------------------
@@ -542,6 +556,12 @@ export async function buildVerifiedPlaceCatalog(
   allPlaces.forEach((place, idx) => {
     place.internalId = `VP_${String(idx + 1).padStart(2, '0')}`;
   });
+
+  console.log(
+    `[PlaceCatalog Diagnostics] Catalog completed for "${destination.canonicalName}" (${anchor.latitude.toFixed(4)}, ${anchor.longitude.toFixed(4)}): ` +
+    `accommodations=${byCategory.accommodation.length}, attractions=${byCategory.attraction.length}, ` +
+    `restaurants=${byCategory.restaurant.length}, activities=${byCategory.activity.length}, totalVerifiedPlaces=${allPlaces.length}`
+  );
 
   return {
     destination,
