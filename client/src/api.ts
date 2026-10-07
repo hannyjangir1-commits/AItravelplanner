@@ -101,6 +101,74 @@ export async function modifyTravelPlan(
   };
 }
 
+export interface AuthApiError extends Error {
+  isNotFound?: boolean;
+}
+
+export async function signupUser(username: string, password: string): Promise<UserProfile> {
+  let response: Response;
+  try {
+    response = await fetch('/api/auth/signup', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ username, password })
+    });
+  } catch {
+    throw new Error('Unable to connect to the authentication service. Please verify your connection.');
+  }
+
+  let data: any;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('Unexpected response from server.');
+  }
+
+  if (!response.ok || !data.authenticated || !data.user) {
+    throw new Error(data.error || 'Failed to sign up.');
+  }
+
+  return data.user as UserProfile;
+}
+
+export async function loginUser(username: string, password: string): Promise<UserProfile> {
+  let response: Response;
+  try {
+    response = await fetch('/api/auth/signin', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ username, password })
+    });
+  } catch {
+    throw new Error('Unable to connect to the authentication service. Please verify your connection.');
+  }
+
+  let data: any;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('Unexpected response from server.');
+  }
+
+  if (!response.ok || !data.authenticated || !data.user) {
+    const error = new Error(data.error || 'Failed to sign in.') as AuthApiError;
+    if (data.notFound) {
+      error.isNotFound = true;
+    }
+    throw error;
+  }
+
+  return data.user as UserProfile;
+}
+
 export async function fetchCurrentUser(): Promise<UserProfile | null> {
   try {
     const response = await fetch('/api/auth/me', {
