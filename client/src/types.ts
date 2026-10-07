@@ -58,10 +58,11 @@ export interface ApiResponse<T> {
 
 export interface UserProfile {
   id: string;
-  name: string | null;
-  email: string | null;
-  profilePicture: string | null;
-  place: string | null;
+  username: string;
+  name?: string | null;
+  email?: string | null;
+  profilePicture?: string | null;
+  place?: string | null;
 }
 
 export interface ItinerarySummary {
