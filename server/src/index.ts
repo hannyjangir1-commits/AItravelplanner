@@ -5,8 +5,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
 import { generateTravelPlanService, modifyTravelPlanService } from './aiService.js';
-import { validateGeneratePlanRequest, validateModifyPlanRequest } from './validation.js';
+import { validateGeneratePlanRequest, validateModifyPlanRequest, isValidUuid } from './validation.js';
+import { testDbConnection } from './db.js';
+import authRouter from './routes/auth.js';
+import { optionalAuth, requireAuth } from './middleware/auth.js';
+import { saveTravelPlan, getTravelPlansByUserId, getTravelPlanByIdForUser } from './db/travelPlans.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,6 +24,9 @@ dotenv.config({ override: false });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Enable trust proxy for Render reverse proxy HTTPS detection and secure cookies
+app.set('trust proxy', 1);
 
 // Security: Disable Express fingerprinting header
 app.disable('x-powered-by');
@@ -96,9 +104,13 @@ app.use(cors({
     // Disallow cross-origin requests by passing false (standard CORS rejection without throwing 500 Error)
     callback(null, false);
   },
+  credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Cookie parsing middleware for authenticated sessions
+app.use(cookieParser());
 
 // Security: Enforce explicit 100kb body size limit to prevent memory exhaustion attacks
 app.use(express.json({ limit: '100kb' }));
@@ -143,8 +155,30 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Database health check endpoint
+app.get('/api/db-health', async (_req: Request, res: Response) => {
+  const isConnected = await testDbConnection();
+  if (isConnected) {
+    res.json({
+      success: true,
+      status: 'ok',
+      database: 'connected'
+    });
+  } else {
+    res.status(503).json({
+      success: false,
+      status: 'error',
+      database: 'disconnected',
+      error: 'Unable to connect to the database.'
+    });
+  }
+});
+
+// Authentication routes (Google OAuth 2.0 flow)
+app.use('/api/auth', authRouter);
+
 // Endpoint 1: Generate initial travel plan
-app.post('/api/generate-travel-plan', aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
+app.post('/api/generate-travel-plan', optionalAuth, aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const validation = validateGeneratePlanRequest(req.body);
     if (!validation.isValid || !validation.data) {
@@ -156,6 +190,17 @@ app.post('/api/generate-travel-plan', aiRateLimiter, async (req: Request, res: R
     }
 
     const result = await generateTravelPlanService(validation.data);
+
+    // If authenticated, persist the successfully generated itinerary to PostgreSQL
+    if (req.user?.userId && result.plan) {
+      try {
+        await saveTravelPlan(req.user.userId, validation.data, result.plan);
+      } catch (dbError: any) {
+        // Robustness: DB unavailability must NOT fail plan generation or leak SQL/credentials
+        console.error('[TravelPlan Save DB Error]:', dbError?.message || dbError);
+      }
+    }
+
     res.json({
       success: true,
       data: result.plan,
@@ -201,6 +246,63 @@ app.post('/api/modify-travel-plan', aiRateLimiter, async (req: Request, res: Res
     res.status(500).json({
       success: false,
       error: 'Failed to modify travel plan. Please try again later.'
+    });
+  }
+});
+
+// Endpoint 3: Retrieve authenticated user's saved travel plans (history list)
+app.get('/api/travel-plans', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+
+    const itineraries = await getTravelPlansByUserId(userId);
+    res.json({
+      itineraries
+    });
+  } catch (error: any) {
+    console.error('[Get Travel Plans Route Error]:', error?.message || error);
+    res.status(500).json({
+      error: 'Unable to load travel history.'
+    });
+  }
+});
+
+// Endpoint 4: Retrieve full travel plan detail by ID for authenticated user
+app.get('/api/travel-plans/:id', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+
+    const { id } = req.params;
+    if (!id || !isValidUuid(id)) {
+      res.status(400).json({
+        error: 'Invalid itinerary ID.'
+      });
+      return;
+    }
+
+    const itinerary = await getTravelPlanByIdForUser(id, userId);
+    if (!itinerary) {
+      res.status(404).json({
+        error: 'Itinerary not found.'
+      });
+      return;
+    }
+
+    res.json({
+      itinerary
+    });
+  } catch (error: any) {
+    console.error('[Get Travel Plan Detail Route Error]:', error?.message || error);
+    res.status(500).json({
+      error: 'Unable to load itinerary.'
     });
   }
 });
