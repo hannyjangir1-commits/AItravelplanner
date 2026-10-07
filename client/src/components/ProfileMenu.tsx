@@ -16,7 +16,6 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [imgFailed, setImgFailed] = useState(false);
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -121,38 +120,24 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
     }
   };
 
-  const getInitials = (name: string | null) => {
-    if (!name || !name.trim()) return 'U';
-    const parts = name.trim().split(/\s+/);
-    if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
-    return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
-  };
-
-  const initials = getInitials(user.name);
+  // Profile icon must contain the uppercase first character of username
+  const avatarLetter = (user.username || user.name || 'U').charAt(0).toUpperCase();
 
   return (
     <div className="profile-menu-wrapper" ref={menuRef}>
-      {/* Profile Avatar Control */}
+      {/* Circular Profile Avatar Button */}
       <button
         type="button"
         className="profile-avatar-btn"
         onClick={toggleOpen}
-        aria-label="User profile and settings"
+        aria-label={`User profile for ${user.username}`}
         aria-expanded={isOpen}
         aria-haspopup="true"
+        title={`Logged in as ${user.username}`}
       >
-        {user.profilePicture && !imgFailed ? (
-          <img
-            src={user.profilePicture}
-            alt={user.name || 'User profile'}
-            className="profile-avatar-img"
-            onError={() => setImgFailed(true)}
-          />
-        ) : (
-          <span className="profile-avatar-fallback" aria-hidden="true">
-            {initials}
-          </span>
-        )}
+        <span className="profile-avatar-fallback" aria-hidden="true">
+          {avatarLetter}
+        </span>
       </button>
 
       {/* Dropdown Menu / Popover */}
@@ -163,20 +148,11 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
             <div className="profile-view-pane">
               <div className="profile-header-card">
                 <div className="profile-card-avatar">
-                  {user.profilePicture && !imgFailed ? (
-                    <img
-                      src={user.profilePicture}
-                      alt={user.name || 'User avatar'}
-                      className="profile-card-img"
-                      onError={() => setImgFailed(true)}
-                    />
-                  ) : (
-                    <span className="profile-card-fallback">{initials}</span>
-                  )}
+                  <span className="profile-card-fallback">{avatarLetter}</span>
                 </div>
                 <div className="profile-card-info">
-                  <div className="profile-card-name">{user.name || 'Traveler'}</div>
-                  <div className="profile-card-email">{user.email || 'Google Account'}</div>
+                  <div className="profile-card-name">{user.name || user.username}</div>
+                  <div className="profile-card-email">@{user.username}</div>
                 </div>
               </div>
 
@@ -233,8 +209,8 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
               )}
 
               <div className="profile-field-group">
-                <label className="profile-field-label">Email (Google Account)</label>
-                <div className="profile-readonly-email">{user.email || 'Verified Google account'}</div>
+                <label className="profile-field-label">Username</label>
+                <div className="profile-readonly-email">@{user.username}</div>
               </div>
 
               <div className="profile-field-group">
@@ -248,7 +224,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
                   value={nameInput}
                   onChange={(e) => setNameInput(e.target.value)}
                   maxLength={255}
-                  placeholder="Your full name"
+                  placeholder="Your display name"
                   disabled={isSaving}
                 />
               </div>
