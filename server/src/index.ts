@@ -174,11 +174,11 @@ app.get('/api/db-health', async (_req: Request, res: Response) => {
   }
 });
 
-// Authentication routes (Google OAuth 2.0 flow)
+// Authentication routes (Username/password authentication flow)
 app.use('/api/auth', authRouter);
 
 // Endpoint 1: Generate initial travel plan
-app.post('/api/generate-travel-plan', optionalAuth, aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
+app.post('/api/generate-travel-plan', requireAuth, aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const validation = validateGeneratePlanRequest(req.body);
     if (!validation.isValid || !validation.data) {
@@ -191,7 +191,7 @@ app.post('/api/generate-travel-plan', optionalAuth, aiRateLimiter, async (req: R
 
     const result = await generateTravelPlanService(validation.data);
 
-    // If authenticated, persist the successfully generated itinerary to PostgreSQL
+    // Persist the successfully generated itinerary to PostgreSQL for the authenticated user
     if (req.user?.userId && result.plan) {
       try {
         await saveTravelPlan(req.user.userId, validation.data, result.plan);
@@ -220,7 +220,7 @@ app.post('/api/generate-travel-plan', optionalAuth, aiRateLimiter, async (req: R
 });
 
 // Endpoint 2: Modify existing travel plan
-app.post('/api/modify-travel-plan', aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
+app.post('/api/modify-travel-plan', requireAuth, aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const validation = validateModifyPlanRequest(req.body);
     if (!validation.isValid || !validation.data) {
