@@ -1,5 +1,18 @@
 import { pool } from '../db.js';
 
+export interface UserRecord {
+  id: string;
+  username: string;
+  name: string | null;
+  place: string | null;
+  email?: string | null;
+  profilePicture?: string | null;
+}
+
+export interface UserWithPassword extends UserRecord {
+  passwordHash: string;
+}
+
 export interface GoogleUserProfile {
   googleId: string;
   email: string;
@@ -7,121 +20,88 @@ export interface GoogleUserProfile {
   profilePicture: string | null;
 }
 
-export interface UserRecord {
-  id: string;
-  email: string | null;
-  name: string | null;
-  profilePicture: string | null;
-  place: string | null;
-}
-
 interface UserDbRow {
   id: string;
+  username: string | null;
+  password_hash?: string;
   email: string | null;
   name: string | null;
   profile_picture: string | null;
   place: string | null;
 }
 
-interface UserEmailCheckRow {
-  id: string;
-  google_id: string | null;
-}
-
 /**
- * Searches for a user by google_id. If found, returns the user.
- * If not found, ensures the email does not collide with an existing account,
- * then inserts a new user record into PostgreSQL using parameterized SQL queries.
- *
- * Initializes place to NULL for newly registered Google users.
- * Never modifies the database schema or exposes database credentials.
+ * Creates a new user record in PostgreSQL with a hashed password.
+ * Guaranteed unique username.
+ * Never returns password_hash to callers.
  */
-export async function findOrCreateGoogleUser(profile: GoogleUserProfile): Promise<UserRecord> {
-  const { googleId, email, name, profilePicture } = profile;
-
-  // 1. Check if user already exists by google_id
-  const findByGoogleIdSql = `
-    SELECT id, email, name, profile_picture, place
-    FROM users
-    WHERE google_id = $1
-    LIMIT 1;
+export async function createUser(username: string, passwordHash: string): Promise<UserRecord> {
+  const insertSql = `
+    INSERT INTO users (username, password_hash)
+    VALUES ($1, $2)
+    RETURNING id, username, name, place;
   `;
-  const existingUserResult = await pool.query<UserDbRow>(findByGoogleIdSql, [googleId]);
-
-  if (existingUserResult.rows.length > 0) {
-    const existing = existingUserResult.rows[0];
-    return {
-      id: existing.id,
-      email: existing.email,
-      name: existing.name,
-      profilePicture: existing.profile_picture,
-      place: existing.place
-    };
-  }
-
-  // 2. Safe collision check: verify email is not already claimed by a user without matching google_id
-  if (email) {
-    const findByEmailSql = `
-      SELECT id, google_id
-      FROM users
-      WHERE email = $1
-      LIMIT 1;
-    `;
-    const emailConflictResult = await pool.query<UserEmailCheckRow>(findByEmailSql, [email]);
-
-    if (emailConflictResult.rows.length > 0) {
-      throw new Error('Account conflict: An existing user account already exists with this email address.');
-    }
-  }
-
-  // 3. Create new user record (place explicitly initialized to NULL)
-  const insertUserSql = `
-    INSERT INTO users (google_id, email, name, profile_picture, place)
-    VALUES ($1, $2, $3, $4, NULL)
-    RETURNING id, email, name, profile_picture, place;
-  `;
-  const insertResult = await pool.query<UserDbRow>(insertUserSql, [
-    googleId,
-    email,
-    name,
-    profilePicture
-  ]);
-
-  const newUser = insertResult.rows[0];
+  const result = await pool.query<UserDbRow>(insertSql, [username.trim(), passwordHash]);
+  const row = result.rows[0];
   return {
-    id: newUser.id,
-    email: newUser.email,
-    name: newUser.name,
-    profilePicture: newUser.profile_picture,
-    place: newUser.place
+    id: row.id,
+    username: row.username || username.trim(),
+    name: row.name || null,
+    place: row.place || null
   };
 }
 
 /**
- * Retrieves a user by their primary key UUID.
- * Returns the full profile record including place, or null if the user does not exist.
- * Uses parameterized queries to prevent SQL injection.
+ * Retrieves a user by case-insensitive username, including their password hash for auth verification.
+ * Only used internally for sign-in comparison.
+ */
+export async function getUserByUsername(username: string): Promise<UserWithPassword | null> {
+  const sql = `
+    SELECT id, username, password_hash, name, place
+    FROM users
+    WHERE LOWER(username) = LOWER($1)
+    LIMIT 1;
+  `;
+  const result = await pool.query<UserDbRow>(sql, [username.trim()]);
+  if (result.rows.length === 0 || !result.rows[0].password_hash) {
+    return null;
+  }
+  const row = result.rows[0];
+  if (!row.password_hash) {
+    return null;
+  }
+  return {
+    id: row.id,
+    username: row.username || username.trim(),
+    passwordHash: row.password_hash,
+    name: row.name || null,
+    place: row.place || null
+  };
+}
+
+/**
+ * Retrieves a user by primary key UUID.
+ * Never exposes password_hash.
  */
 export async function getUserById(id: string): Promise<UserRecord | null> {
   const getUserSql = `
-    SELECT id, email, name, profile_picture, place
+    SELECT id, username, name, place, email, profile_picture
     FROM users
     WHERE id = $1
     LIMIT 1;
   `;
   const result = await pool.query<UserDbRow>(getUserSql, [id]);
-
   if (result.rows.length === 0) {
     return null;
   }
-
   const row = result.rows[0];
   return {
     id: row.id,
-    email: row.email,
-    name: row.name,
-    profilePicture: row.profile_picture,
-    place: row.place
+    username: row.username || (row.email ? row.email.split('@')[0] : 'user'),
+    name: row.name || null,
+    place: row.place || null,
+    email: row.email || null,
+    profilePicture: row.profile_picture || null
   };
 }
 
@@ -132,10 +112,7 @@ export interface UpdateUserProfileInput {
 
 /**
  * Updates an authenticated user's name and/or place in PostgreSQL.
- * - Updates only the row matching id ($1).
- * - Uses static parameterized SQL (no dynamic SQL concatenation).
- * - Updates updated_at to CURRENT_TIMESTAMP.
- * - Returns updated UserRecord or null if user does not exist.
+ * Parameterized query; never modifies credentials or unauthorized fields.
  */
 export async function updateUserProfile(
   id: string,
@@ -148,13 +125,11 @@ export async function updateUserProfile(
   let placeValue: string | null = null;
 
   if (typeof name === 'object' && name !== null) {
-    // Called as updateUserProfile(id, { name, place })
     updateName = name.name !== undefined;
     nameValue = name.name !== undefined ? name.name : null;
     updatePlace = name.place !== undefined;
     placeValue = name.place !== undefined ? name.place : null;
   } else {
-    // Called as updateUserProfile(id, name, place)
     updateName = name !== undefined;
     nameValue = name !== undefined ? name : null;
     updatePlace = place !== undefined;
@@ -168,7 +143,7 @@ export async function updateUserProfile(
       place = CASE WHEN $4::boolean THEN $5 ELSE place END,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
-    RETURNING id, email, name, profile_picture, place;
+    RETURNING id, username, name, place;
   `;
 
   const result = await pool.query<UserDbRow>(updateSql, [
@@ -186,9 +161,58 @@ export async function updateUserProfile(
   const row = result.rows[0];
   return {
     id: row.id,
-    email: row.email,
-    name: row.name,
-    profilePicture: row.profile_picture,
-    place: row.place
+    username: row.username || 'user',
+    name: row.name || null,
+    place: row.place || null
+  };
+}
+
+/**
+ * Kept for database compatibility if any legacy records exist.
+ */
+export async function findOrCreateGoogleUser(profile: GoogleUserProfile): Promise<UserRecord> {
+  const { googleId, email, name, profilePicture } = profile;
+  const findByGoogleIdSql = `
+    SELECT id, username, email, name, profile_picture, place
+    FROM users
+    WHERE google_id = $1
+    LIMIT 1;
+  `;
+  const existingUserResult = await pool.query<UserDbRow>(findByGoogleIdSql, [googleId]);
+
+  if (existingUserResult.rows.length > 0) {
+    const existing = existingUserResult.rows[0];
+    return {
+      id: existing.id,
+      username: existing.username || (email ? email.split('@')[0] : 'user'),
+      email: existing.email,
+      name: existing.name,
+      profilePicture: existing.profile_picture,
+      place: existing.place
+    };
+  }
+
+  const username = email ? email.split('@')[0] : `user_${googleId.slice(0, 8)}`;
+  const insertUserSql = `
+    INSERT INTO users (google_id, username, email, name, profile_picture, place)
+    VALUES ($1, $2, $3, $4, $5, NULL)
+    RETURNING id, username, email, name, profile_picture, place;
+  `;
+  const insertResult = await pool.query<UserDbRow>(insertUserSql, [
+    googleId,
+    username,
+    email,
+    name,
+    profilePicture
+  ]);
+
+  const newUser = insertResult.rows[0];
+  return {
+    id: newUser.id,
+    username: newUser.username || username,
+    email: newUser.email,
+    name: newUser.name,
+    profilePicture: newUser.profile_picture,
+    place: newUser.place
   };
 }
