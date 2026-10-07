@@ -55,3 +55,34 @@ export interface ApiResponse<T> {
   message?: string;
   error?: string;
 }
+
+export interface UserProfile {
+  id: string;
+  name: string | null;
+  email: string | null;
+  profilePicture: string | null;
+  place: string | null;
+}
+
+export interface ItinerarySummary {
+  id: string;
+  destination: string;
+  numberOfDays: number;
+  numberOfTravellers: number;
+  createdAt: string;
+}
+
+export interface SavedItineraryDetail {
+  id: string;
+  destination: string;
+  numberOfDays: number;
+  budgetInr: number;
+  numberOfTravellers: number;
+  interests: string[];
+  accommodationPreference: AccommodationType;
+  activityLevel: ActivityLevelType;
+  additionalNotes: string | null;
+  plan: TravelPlan;
+  createdAt: string;
+  updatedAt: string;
+}
