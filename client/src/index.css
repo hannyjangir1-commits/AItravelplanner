@@ -267,38 +267,7 @@ textarea:focus-visible,
   border-color: #ffffff;
 }
 
-.btn-google-login {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  background-color: #ffffff;
-  color: #1e293b;
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  padding: 0.45rem 1rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition-normal);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-  white-space: nowrap;
-}
 
-.btn-google-login:hover {
-  background-color: #f8fafc;
-  border-color: #ffffff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-  transform: translateY(-1px);
-}
-
-.btn-google-login:active {
-  transform: translateY(0);
-}
-
-.btn-google-login:focus-visible {
-  outline: 2px solid #38bdf8;
-  outline-offset: 2px;
-}
 
 /* ==========================================================================
    HERO / BANNER SECTION
@@ -1922,8 +1891,7 @@ textarea:focus-visible,
   .brand-tagline {
     display: none;
   }
-  .btn-nav-action,
-  .btn-google-login {
+  .btn-nav-action {
     padding: 0.35rem 0.65rem;
     font-size: 0.78rem;
   }
@@ -2011,7 +1979,6 @@ textarea:focus-visible,
   .btn-alert-close,
   .btn-action-outline,
   .btn-nav-action,
-  .btn-google-login,
   .error-panel-header,
   .form-error-panel,
   .prompt-pill-btn,
@@ -3036,4 +3003,241 @@ textarea:focus-visible,
     text-align: center;
   }
 }
+
+/* ==========================================================================
+   AUTHENTICATION CALL-TO-ACTION (Unauthenticated Main Page)
+   ========================================================================== */
+.auth-cta-section {
+  padding: 4.5rem 0 6rem;
+  background-color: var(--bg-app);
+}
+
+.auth-cta-card {
+  max-width: 600px;
+  margin: 0 auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 3rem 2.5rem;
+  text-align: center;
+}
+
+.auth-cta-badge {
+  display: inline-block;
+  background-color: var(--color-primary-light);
+  color: var(--color-primary-dark);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.35rem 0.85rem;
+  border-radius: var(--radius-full);
+  margin-bottom: 1.25rem;
+}
+
+.auth-cta-heading {
+  font-family: var(--font-heading);
+  font-size: 1.85rem;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.02em;
+  margin: 0 0 0.85rem 0;
+  line-height: 1.25;
+}
+
+.auth-cta-subtext {
+  color: var(--text-secondary);
+  font-size: 0.98rem;
+  line-height: 1.6;
+  max-width: 480px;
+  margin: 0 auto 2.25rem auto;
+}
+
+.auth-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #ffffff;
+  border: none;
+  padding: 0.9rem 2.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35);
+  transition: all var(--transition-normal);
+}
+
+.auth-cta-btn:hover {
+  background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
+  box-shadow: 0 6px 20px rgba(2, 132, 199, 0.45);
+  transform: translateY(-2px);
+}
+
+.auth-cta-btn:active {
+  transform: translateY(0);
+}
+
+/* ==========================================================================
+   AUTHENTICATION PAGE (Sign Up & Log In)
+   ========================================================================== */
+.auth-page-wrapper {
+  background-color: var(--bg-app);
+  min-height: calc(100vh - 120px);
+  padding-bottom: 4rem;
+}
+
+.auth-nav-bar {
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-light);
+  padding: 0.75rem 0;
+}
+
+.auth-nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.auth-container {
+  max-width: 480px;
+  margin: 3rem auto;
+}
+
+.auth-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 2.5rem 2.25rem;
+}
+
+.auth-tabs {
+  display: flex;
+  background: var(--bg-surface-subtle);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  margin-bottom: 1.75rem;
+}
+
+.auth-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 0.6rem 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.auth-tab.active {
+  background: #ffffff;
+  color: var(--text-main);
+  box-shadow: var(--shadow-xs);
+}
+
+.auth-header {
+  text-align: center;
+  margin-bottom: 1.75rem;
+}
+
+.auth-title {
+  font-family: var(--font-heading);
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0 0 0.4rem 0;
+  letter-spacing: -0.02em;
+}
+
+.auth-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.btn-auth-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  background-color: var(--color-primary);
+  color: #ffffff;
+  border: 1px solid var(--color-primary-dark);
+  padding: 0.8rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  margin-top: 0.5rem;
+}
+
+.btn-auth-submit:hover:not(:disabled) {
+  background-color: var(--color-primary-dark);
+}
+
+.btn-auth-submit:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.auth-switch-footer {
+  text-align: center;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-light);
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.auth-switch-footer p {
+  margin: 0;
+}
+
+.auth-link-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-primary);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+  margin-left: 0.25rem;
+}
+
+.auth-link-btn:hover {
+  color: var(--color-primary-dark);
+}
+
+@media (max-width: 480px) {
+  .auth-cta-card {
+    padding: 2rem 1.25rem;
+  }
+  .auth-cta-heading {
+    font-size: 1.45rem;
+  }
+  .auth-cta-btn {
+    width: 100%;
+    padding: 0.85rem 1.5rem;
+  }
+  .auth-card {
+    padding: 1.75rem 1.25rem;
+  }
+}
+
 
