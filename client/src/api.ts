@@ -1,4 +1,4 @@
-import type { TravelPlan, TripFormData, ApiResponse } from './types';
+import type { TravelPlan, TripFormData, ApiResponse, UserProfile, ItinerarySummary, SavedItineraryDetail } from './types';
 
 export async function generateTravelPlan(formData: TripFormData): Promise<{ plan: TravelPlan; isDemo: boolean; message?: string }> {
   const payload = {
@@ -19,6 +19,7 @@ export async function generateTravelPlan(formData: TripFormData): Promise<{ plan
       headers: {
         'Content-Type': 'application/json'
       },
+      credentials: 'include',
       body: JSON.stringify(payload)
     });
   } catch {
@@ -98,4 +99,124 @@ export async function modifyTravelPlan(
     isDemo: Boolean(data.isDemo),
     message: data.message
   };
+}
+
+export async function fetchCurrentUser(): Promise<UserProfile | null> {
+  try {
+    const response = await fetch('/api/auth/me', {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    if (data.authenticated && data.user) {
+      return data.user as UserProfile;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function updateUserProfile(payload: { name?: string; place?: string }): Promise<UserProfile> {
+  let response: Response;
+  try {
+    response = await fetch('/api/auth/profile', {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    throw new Error('Unable to connect to the profile service. Please verify your network.');
+  }
+
+  let data: any;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('Unexpected response from server.');
+  }
+
+  if (!response.ok || !data.authenticated || !data.user) {
+    throw new Error(data.error || data.message || `Failed to update profile (Status ${response.status}).`);
+  }
+
+  return data.user as UserProfile;
+}
+
+export async function logoutUser(): Promise<void> {
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+  } catch (error) {
+    console.error('[Logout API Error]:', error);
+  }
+}
+
+export async function fetchTravelPlans(): Promise<ItinerarySummary[]> {
+  let response: Response;
+  try {
+    response = await fetch('/api/travel-plans', {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+  } catch {
+    throw new Error('Unable to load previous itineraries.');
+  }
+
+  if (!response.ok) {
+    throw new Error('Unable to load previous itineraries.');
+  }
+
+  const data = await response.json();
+  if (Array.isArray(data.itineraries)) {
+    return data.itineraries as ItinerarySummary[];
+  }
+  return [];
+}
+
+export async function fetchTravelPlanById(id: string): Promise<SavedItineraryDetail> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/travel-plans/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+  } catch {
+    throw new Error('Unable to load itinerary.');
+  }
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new Error(errorData?.error || 'Unable to load itinerary.');
+  }
+
+  const data = await response.json();
+  if (!data || !data.itinerary) {
+    throw new Error('Itinerary not found.');
+  }
+
+  return data.itinerary as SavedItineraryDetail;
 }
