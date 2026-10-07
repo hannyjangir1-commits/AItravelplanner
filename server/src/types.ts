@@ -53,15 +53,12 @@ export interface ModifyPlanRequest {
 
 export interface AuthenticatedUser {
   userId: string;
-  email: string | null;
-  name: string | null;
-  profilePicture: string | null;
+  username: string;
 }
 
 export interface UserProfile {
   id: string;
-  email: string | null;
-  name: string | null;
-  profilePicture: string | null;
-  place: string | null;
+  username: string;
+  name?: string | null;
+  place?: string | null;
 }
