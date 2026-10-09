@@ -29,6 +29,7 @@ import {
   GooglePlacesParseError
 } from './src/services/googlePlaces.js';
 import { resolveDestination } from './src/services/destinationResolver.js';
+import { OsmRequestError, OsmNoResultsError } from './src/services/osmProvider.js';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -412,39 +413,33 @@ async function runAllTests() {
   await runTest('resolveDestination: Blank destination input throws error', async () => {
     await assert.rejects(
       () => resolveDestination('   '),
-      (err: any) => err instanceof GooglePlacesRequestError
+      (err: any) => err instanceof OsmRequestError || err instanceof GooglePlacesRequestError
     );
   });
 
   await runTest('resolveDestination: Successfully resolves destination with canonical name', async () => {
-    process.env.GOOGLE_MAPS_API_KEY = 'test_mock_api_key';
-
-    const mockGeocodePayload = {
-      status: 'OK',
-      results: [
-        {
-          place_id: 'ChIJ_shirdi_id',
-          formatted_address: 'Shirdi, Maharashtra 423109, India',
-          geometry: {
-            location: { lat: 19.7667, lng: 74.4770 },
-            location_type: 'APPROXIMATE',
-            viewport: {
-              northeast: { lat: 19.78, lng: 74.49 },
-              southwest: { lat: 19.75, lng: 74.46 }
-            }
-          },
-          address_components: [
-            { long_name: 'Shirdi', short_name: 'Shirdi', types: ['locality', 'political'] },
-            { long_name: 'Ahmednagar', short_name: 'Ahmednagar', types: ['administrative_area_level_2', 'political'] },
-            { long_name: 'Maharashtra', short_name: 'MH', types: ['administrative_area_level_1', 'political'] },
-            { long_name: 'India', short_name: 'IN', types: ['country', 'political'] }
-          ]
+    const mockNominatimPayload = [
+      {
+        place_id: 12345,
+        osm_type: 'relation',
+        osm_id: 67890,
+        lat: '19.7667',
+        lon: '74.4770',
+        display_name: 'Shirdi, Maharashtra 423109, India',
+        name: 'Shirdi',
+        boundingbox: ['19.75', '19.78', '74.46', '74.49'],
+        address: {
+          town: 'Shirdi',
+          county: 'Ahmednagar',
+          state: 'Maharashtra',
+          country: 'India',
+          postcode: '423109'
         }
-      ]
-    };
+      }
+    ];
 
     const mockFetch: typeof fetch = async () =>
-      new Response(JSON.stringify(mockGeocodePayload), {
+      new Response(JSON.stringify(mockNominatimPayload), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
@@ -456,24 +451,21 @@ async function runAllTests() {
     assert.equal(resolved.formattedAddress, 'Shirdi, Maharashtra 423109, India');
     assert.equal(resolved.latitude, 19.7667);
     assert.equal(resolved.longitude, 74.4770);
-    assert.equal(resolved.providerPlaceId, 'ChIJ_shirdi_id');
-    assert.equal(resolved.locationType, 'APPROXIMATE');
-    assert.equal(resolved.addressComponents.length, 4);
+    assert.equal(resolved.providerPlaceId, 'osm:relation/67890');
+    assert.ok(resolved.addressComponents.length >= 4);
     assert.ok(resolved.viewport);
   });
 
-  await runTest('resolveDestination: ZERO_RESULTS throws GooglePlacesNoResultsError', async () => {
-    process.env.GOOGLE_MAPS_API_KEY = 'test_mock_api_key';
-
+  await runTest('resolveDestination: ZERO_RESULTS throws error', async () => {
     const mockFetch: typeof fetch = async () =>
-      new Response(JSON.stringify({ status: 'ZERO_RESULTS', results: [] }), {
+      new Response(JSON.stringify([]), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
 
     await assert.rejects(
       () => resolveDestination('UnknownMarsColony99', { fetchFn: mockFetch }),
-      (err: any) => err instanceof GooglePlacesNoResultsError
+      (err: any) => err instanceof OsmNoResultsError || err instanceof GooglePlacesNoResultsError
     );
   });
 

@@ -39,6 +39,7 @@ export interface TravelPlan {
   weatherAdvice: string;
   budgetTips: string[];
   itinerary: DayPlan[];
+  includeDayByDayItinerary?: boolean;
   generatedAt?: string;
   resolvedDestination?: ResolvedDestination;
   verifiedPlacesCatalog?: VerifiedPlace[];
@@ -54,6 +55,7 @@ export interface GeneratePlanRequest {
   accommodationPreference: 'Budget' | 'Moderate' | 'Premium';
   activityLevel: 'Relaxed' | 'Moderate' | 'Active';
   additionalNotes?: string;
+  includeDayByDayItinerary?: boolean;
 }
 
 export interface ModifyPlanRequest {
@@ -91,7 +93,7 @@ export interface VerifiedPlaceLocation {
  */
 export interface VerifiedPlace {
   internalId: string;
-  provider: 'google_places';
+  provider: 'openstreetmap' | 'google_places';
   providerPlaceId: string;
   name: string;
   primaryCategory: PlacePrimaryCategory;
@@ -110,5 +112,6 @@ export interface VerifiedPlace {
   priceStatus: PriceStatus;
   estimatedPriceInrRange: { min: number; max: number } | null;
   verificationTimestamp: string;
+  attribution?: string;
 }
 

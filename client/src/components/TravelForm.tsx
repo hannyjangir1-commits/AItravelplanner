@@ -151,7 +151,8 @@ export const TravelForm: React.FC<TravelFormProps> = ({ onSubmit, isLoading, err
     interests: ['Food', 'Culture'],
     accommodationPreference: 'Moderate',
     activityLevel: 'Moderate',
-    additionalNotes: ''
+    additionalNotes: '',
+    includeDayByDayItinerary: true
   });
 
   const [touched, setTouched] = useState<Record<string, boolean>>({});
@@ -523,6 +524,31 @@ export const TravelForm: React.FC<TravelFormProps> = ({ onSubmit, isLoading, err
                   disabled={isLoading}
                   aria-label="Optional Additional Notes (e.g. dietary preferences, accessibility needs, preferred pace)"
                 />
+              </div>
+
+              {/* Optional Day-by-Day Itinerary Checkbox */}
+              <div className="form-field-group col-12">
+                <div className="itinerary-toggle-container">
+                  <label className="itinerary-checkbox-label" htmlFor="includeDayByDayItinerary">
+                    <input
+                      id="includeDayByDayItinerary"
+                      type="checkbox"
+                      className="itinerary-checkbox-input"
+                      checked={formData.includeDayByDayItinerary ?? true}
+                      onChange={(e) =>
+                        setFormData({ ...formData, includeDayByDayItinerary: e.target.checked })
+                      }
+                      disabled={isLoading}
+                    />
+                    <div className="itinerary-checkbox-text">
+                      <span className="itinerary-checkbox-title">Generate day-by-day itinerary</span>
+                      <span className="itinerary-checkbox-desc">
+                        Organizes your trip into structured morning, afternoon, and evening daily schedules.
+                        Uncheck to receive a flexible destination guide with verified places, stays, dining, and activities without fixed daily timeslots.
+                      </span>
+                    </div>
+                  </label>
+                </div>
               </div>
             </div>
 

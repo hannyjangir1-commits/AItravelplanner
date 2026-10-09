@@ -34,8 +34,8 @@ export function validateAndSanitizeTravelPlan(data: unknown): TravelPlan | null 
     return null;
   }
 
-  // Must have day itinerary as an array with at least 1 day
-  if (!Array.isArray(data.itinerary) || data.itinerary.length === 0) {
+  // Must have day itinerary as an array
+  if (!Array.isArray(data.itinerary)) {
     return null;
   }
 
@@ -110,6 +110,10 @@ export function validateAndSanitizeTravelPlan(data: unknown): TravelPlan | null 
       ? data.generatedAt
       : undefined;
 
+  const includeDayByDayItinerary = typeof data.includeDayByDayItinerary === 'boolean'
+    ? data.includeDayByDayItinerary
+    : sanitizedItinerary.length > 0;
+
   return {
     accommodationGuidance,
     placesToVisit,
@@ -118,6 +122,7 @@ export function validateAndSanitizeTravelPlan(data: unknown): TravelPlan | null 
     weatherAdvice,
     budgetTips,
     itinerary: sanitizedItinerary,
+    includeDayByDayItinerary,
     generatedAt
   };
 }
@@ -169,6 +174,10 @@ export function validateAndSanitizeTripDetails(data: unknown): TripFormData | nu
     ? data.additionalNotes
     : '';
 
+  const includeDayByDayItinerary = typeof data.includeDayByDayItinerary === 'boolean'
+    ? data.includeDayByDayItinerary
+    : true;
+
   return {
     destination: data.destination.trim(),
     numberOfDays: numDays,
@@ -177,7 +186,8 @@ export function validateAndSanitizeTripDetails(data: unknown): TripFormData | nu
     interests,
     accommodationPreference,
     activityLevel,
-    additionalNotes
+    additionalNotes,
+    includeDayByDayItinerary
   };
 }
 

@@ -238,7 +238,8 @@ export function App() {
         interests: openedSavedItinerary.interests,
         accommodationPreference: openedSavedItinerary.accommodationPreference,
         activityLevel: openedSavedItinerary.activityLevel,
-        additionalNotes: openedSavedItinerary.additionalNotes || ''
+        additionalNotes: openedSavedItinerary.additionalNotes || '',
+        includeDayByDayItinerary: openedSavedItinerary.includeDayByDayItinerary ?? (openedSavedItinerary.plan?.includeDayByDayItinerary ?? (Array.isArray(openedSavedItinerary.plan?.itinerary) && openedSavedItinerary.plan.itinerary.length > 0))
       };
 
       const response = await modifyTravelPlan(tripFormData, openedSavedItinerary.plan, modificationRequest);

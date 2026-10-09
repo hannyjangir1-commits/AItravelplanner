@@ -149,10 +149,22 @@ const aiRateLimiter = rateLimit({
 
 // Health check endpoint (safe status check without secret leakage)
 app.get('/api/health', (_req: Request, res: Response) => {
+  const isGeminiConfigured = Boolean(
+    process.env.GEMINI_API_KEY &&
+    process.env.GEMINI_API_KEY.trim() &&
+    process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here'
+  );
   res.json({
     success: true,
     status: 'ok',
-    service: 'AI Travel Agent API'
+    service: 'AI Travel Agent API',
+    providers: {
+      geminiConfigured: isGeminiConfigured,
+      geocodingProvider: 'openstreetmap_nominatim',
+      placeDiscoveryProvider: 'openstreetmap_overpass',
+      cacheStatus: 'active',
+      databaseConfigured: Boolean(process.env.DATABASE_URL)
+    }
   });
 });
 
@@ -347,6 +359,8 @@ async function startServer(): Promise<void> {
     } else {
       console.log('Gemini API key detected.');
     }
+
+    console.log('OpenStreetMap discovery provider active (Nominatim + Overpass API). No paid maps API required.');
   });
 }
 

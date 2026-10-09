@@ -34,6 +34,7 @@ import {
   RADIUS_TIER_2_METERS,
   MAX_SEARCH_RADIUS_METERS
 } from './src/services/placeCatalog.js';
+import { clearOsmCache } from './src/services/osmProvider.js';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -278,87 +279,51 @@ async function runAllTests() {
   console.log('\n--- 3. Testing Catalog Builder & Rural Destination Fallback ---');
 
   await runTest('11 & 12. Rural destination honesty: 0 accommodation, 1 attraction', async () => {
-    process.env.GOOGLE_MAPS_API_KEY = 'test_mock_key';
-
-    // Mock provider response:
-    // - 0 accommodations across all tiers
-    // - 1 real attraction at Tier 1 (village temple)
-    // - 0 restaurants at Tier 1, 2 restaurants at Tier 2 (highway dhabas)
+    clearOsmCache();
+    // Mock Overpass provider response:
+    // - 0 accommodations
+    // - 1 real attraction at Tier 1 (village temple: 0.3km away)
+    // - 2 restaurants at Tier 2 (highway dhabas: 6.2km and 8.4km away)
     // - 0 activities
-    const mockFetch: typeof fetch = async (url, init) => {
-      const body = JSON.parse(init?.body as string || '{}');
-      const types: string[] = body.includedTypes || [];
-
-      if (types.includes('hotel') || types.includes('lodging')) {
-        // Zero accommodations found
-        return new Response(JSON.stringify({ places: [] }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      if (types.includes('tourist_attraction') || types.includes('place_of_worship')) {
-        // Exactly 1 temple exists in the village
-        return new Response(
-          JSON.stringify({
-            places: [
-              {
-                id: 'ChIJ_village_temple',
-                displayName: { text: 'Shri Ram Mandir Chandekasare' },
-                formattedAddress: 'Gram Panchayat Road, Chandekasare',
-                location: { latitude: 19.8658, longitude: 74.4816 },
-                types: ['hindu_temple', 'place_of_worship'],
-                rating: 4.7,
-                userRatingCount: 42
+    const mockFetch: typeof fetch = async () => {
+      return new Response(
+        JSON.stringify({
+          elements: [
+            {
+              type: 'node',
+              id: 101,
+              lat: 19.8658,
+              lon: 74.4816,
+              tags: {
+                name: 'Shri Ram Mandir Chandekasare',
+                amenity: 'place_of_worship',
+                religion: 'hindu'
               }
-            ]
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-
-      if (types.includes('restaurant')) {
-        const radius = body.locationRestriction?.circle?.radius || 0;
-        if (radius <= 5000) {
-          // No restaurants in exact village
-          return new Response(JSON.stringify({ places: [] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-        // At 15km, 2 highway dhabas found
-        return new Response(
-          JSON.stringify({
-            places: [
-              {
-                id: 'ChIJ_highway_dhaba_1',
-                displayName: { text: 'Kisan Dhaba' },
-                formattedAddress: 'Shirdi-Manmad Highway',
-                location: { latitude: 19.8100, longitude: 74.4700 }, // ~6.2 km away
-                types: ['restaurant'],
-                rating: 4.1,
-                userRatingCount: 110,
-                priceLevel: 'PRICE_LEVEL_INEXPENSIVE'
-              },
-              {
-                id: 'ChIJ_highway_dhaba_2',
-                displayName: { text: 'Hotel Sai Prasad Food' },
-                formattedAddress: 'Highway Toll Naka',
-                location: { latitude: 19.7900, longitude: 74.4700 }, // ~8.4 km away
-                types: ['restaurant'],
-                rating: 3.9,
-                userRatingCount: 50
+            },
+            {
+              type: 'node',
+              id: 201,
+              lat: 19.8100,
+              lon: 74.4700,
+              tags: {
+                name: 'Kisan Dhaba',
+                amenity: 'restaurant'
               }
-            ]
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(JSON.stringify({ places: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+            },
+            {
+              type: 'node',
+              id: 202,
+              lat: 19.7900,
+              lon: 74.4700,
+              tags: {
+                name: 'Hotel Sai Prasad Food',
+                amenity: 'restaurant'
+              }
+            }
+          ]
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
     };
 
     const catalog = await buildVerifiedPlaceCatalog(mockDestination, {
@@ -385,20 +350,31 @@ async function runAllTests() {
   });
 
   await runTest('5 & 16. Deduplication: Duplicate providerPlaceIds across search tiers are deduplicated', async () => {
-    process.env.GOOGLE_MAPS_API_KEY = 'test_mock_key';
-
-    // Mock returns the SAME hotel in both 5km and 15km searches
+    clearOsmCache();
+    // Mock returns the SAME hotel in both node and duplicate way form
     const mockFetch: typeof fetch = async () =>
       new Response(
         JSON.stringify({
-          places: [
+          elements: [
             {
-              id: 'ChIJ_duplicate_hotel',
-              displayName: { text: 'Hotel Sai Residency' },
-              formattedAddress: 'Station Road',
-              location: { latitude: 19.8654, longitude: 74.4812 },
-              types: ['hotel', 'lodging'],
-              rating: 4.2
+              type: 'node',
+              id: 501,
+              lat: 19.8654,
+              lon: 74.4812,
+              tags: {
+                name: 'Hotel Sai Residency',
+                tourism: 'hotel'
+              }
+            },
+            {
+              type: 'node',
+              id: 501, // same ID duplicated
+              lat: 19.8654,
+              lon: 74.4812,
+              tags: {
+                name: 'Hotel Sai Residency',
+                tourism: 'hotel'
+              }
             }
           ]
         }),
@@ -407,12 +383,12 @@ async function runAllTests() {
 
     const catalog = await buildVerifiedPlaceCatalog(mockDestination, {
       fetchFn: mockFetch,
-      minAccommodation: 5 // forces search through multiple tiers
+      minAccommodation: 5
     });
 
     const accomIds = catalog.byCategory.accommodation.map((p) => p.providerPlaceId);
     assert.equal(accomIds.length, 1, 'Duplicate hotel was not deduplicated');
-    assert.equal(accomIds[0], 'ChIJ_duplicate_hotel');
+    assert.equal(accomIds[0], 'osm:node/501');
 
     // Global places array must also have unique providerPlaceIds
     const allIds = catalog.places.map((p) => p.providerPlaceId);
@@ -421,19 +397,20 @@ async function runAllTests() {
   });
 
   await runTest('13. No estimated accommodation price is generated', async () => {
-    process.env.GOOGLE_MAPS_API_KEY = 'test_mock_key';
-
+    clearOsmCache();
     const mockFetch: typeof fetch = async () =>
       new Response(
         JSON.stringify({
-          places: [
+          elements: [
             {
-              id: 'ChIJ_hotel_price_test',
-              displayName: { text: 'Grand Inn' },
-              formattedAddress: 'Main Road',
-              location: { latitude: 19.8654, longitude: 74.4812 },
-              types: ['hotel'],
-              priceLevel: 'PRICE_LEVEL_MODERATE'
+              type: 'node',
+              id: 601,
+              lat: 19.8654,
+              lon: 74.4812,
+              tags: {
+                name: 'Grand Inn',
+                tourism: 'hotel'
+              }
             }
           ]
         }),
@@ -443,7 +420,7 @@ async function runAllTests() {
     const catalog = await buildVerifiedPlaceCatalog(mockDestination, { fetchFn: mockFetch });
 
     for (const place of catalog.places) {
-      assert.equal(place.estimatedPriceInrRange, null, 'Must NOT generate estimated price in Phase 2A');
+      assert.equal(place.estimatedPriceInrRange, null, 'Must NOT generate estimated price');
       assert.ok(
         place.priceStatus === 'PRICE_LEVEL_ONLY' || place.priceStatus === 'PRICE_UNAVAILABLE',
         `Unexpected price status: ${place.priceStatus}`
@@ -452,20 +429,24 @@ async function runAllTests() {
   });
 
   await runTest('14. Internal IDs are unique and sequential within a catalog (VP_01, VP_02, ...)', async () => {
-    process.env.GOOGLE_MAPS_API_KEY = 'test_mock_key';
-
-    let counter = 0;
+    clearOsmCache();
     const mockFetch: typeof fetch = async () => {
-      counter++;
       return new Response(
         JSON.stringify({
-          places: [
+          elements: [
             {
-              id: `ChIJ_place_${counter}`,
-              displayName: { text: `Place Number ${counter}` },
-              formattedAddress: `Address ${counter}`,
-              location: { latitude: 19.8654, longitude: 74.4812 },
-              types: ['point_of_interest']
+              type: 'node',
+              id: 701,
+              lat: 19.8654,
+              lon: 74.4812,
+              tags: { name: 'Place Number 1', tourism: 'attraction' }
+            },
+            {
+              type: 'node',
+              id: 702,
+              lat: 19.8655,
+              lon: 74.4813,
+              tags: { name: 'Place Number 2', tourism: 'attraction' }
             }
           ]
         }),
@@ -488,20 +469,21 @@ async function runAllTests() {
   });
 
   await runTest('15. Provider data is not mutated into fictional values', async () => {
-    process.env.GOOGLE_MAPS_API_KEY = 'test_mock_key';
-
-    const originalName = 'Exact Authentic Name From Google 123';
+    clearOsmCache();
+    const originalName = 'Exact Authentic Name From Provider 123';
     const mockFetch: typeof fetch = async () =>
       new Response(
         JSON.stringify({
-          places: [
+          elements: [
             {
-              id: 'ChIJ_exact_test',
-              displayName: { text: originalName },
-              formattedAddress: 'Plot 4, Near Bus Stand',
-              location: { latitude: 19.8654, longitude: 74.4812 },
-              types: ['restaurant'],
-              rating: 3.8
+              type: 'node',
+              id: 801,
+              lat: 19.8654,
+              lon: 74.4812,
+              tags: {
+                name: originalName,
+                amenity: 'restaurant'
+              }
             }
           ]
         }),

@@ -589,8 +589,8 @@ export const PlanResult: React.FC<PlanResultProps> = ({
           </article>
         </div>
 
-        {/* Day-Wise Itinerary */}
-        <DayWiseItinerary itinerary={plan.itinerary} />
+        {/* Day-Wise Itinerary (renders when requested and itinerary has days) */}
+        {plan.includeDayByDayItinerary !== false && <DayWiseItinerary itinerary={plan.itinerary} />}
 
         {/* Modify Plan Chat Input */}
         <PlanModifier

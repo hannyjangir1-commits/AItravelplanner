@@ -43,6 +43,14 @@ export async function saveTravelPlan(
     RETURNING id, created_at;
   `;
 
+  // Guarantee includeDayByDayItinerary is explicitly preserved on the saved plan JSON
+  const planToSave: TravelPlan = {
+    ...plan,
+    includeDayByDayItinerary: typeof plan.includeDayByDayItinerary === 'boolean'
+      ? plan.includeDayByDayItinerary
+      : (details.includeDayByDayItinerary ?? (Array.isArray(plan.itinerary) && plan.itinerary.length > 0))
+  };
+
   const values = [
     userId.trim(),
     details.destination.trim(),
@@ -53,7 +61,7 @@ export async function saveTravelPlan(
     details.accommodationPreference,
     details.activityLevel,
     details.additionalNotes ? details.additionalNotes.trim() : null,
-    JSON.stringify(plan)
+    JSON.stringify(planToSave)
   ];
 
   const result = await pool.query<{ id: string; created_at: Date | string }>(insertSql, values);
@@ -123,6 +131,7 @@ export interface DetailedItineraryRecord {
   accommodationPreference: string;
   activityLevel: string;
   additionalNotes: string | null;
+  includeDayByDayItinerary?: boolean;
   plan: TravelPlan;
   createdAt: string;
   updatedAt: string;
@@ -208,6 +217,7 @@ export async function getTravelPlanByIdForUser(
     accommodationPreference: row.accommodation_preference,
     activityLevel: row.activity_level,
     additionalNotes: row.additional_notes || null,
+    includeDayByDayItinerary: parsedPlan?.includeDayByDayItinerary ?? (Array.isArray(parsedPlan?.itinerary) && parsedPlan.itinerary.length > 0),
     plan: parsedPlan as TravelPlan,
     createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
     updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString()

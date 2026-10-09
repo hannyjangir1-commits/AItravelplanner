@@ -3,23 +3,35 @@
  *
  * Resolves arbitrary user-entered destinations (including small villages,
  * rural settlements, misspelled queries, and remote destinations)
- * into authoritative geographic search anchors using Google Geocoding.
+ * into authoritative geographic search anchors using OpenStreetMap Nominatim.
  *
- * DESIGN NOTE:
- * Google Geocoding returns a center coordinate (geometry.location) and a
- * viewing bounding box (geometry.viewport). We treat the coordinates as the
- * authoritative geographic search anchor for subsequent radial POI searches.
- * We do NOT claim that Google's viewport is the exact legal or administrative
- * boundary of the destination settlement.
+ * Design Notes:
+ * - Uses OpenStreetMap Nominatim for open, cost-conscious geocoding.
+ * - Extracts canonical city/town/village name, full formatted address, coordinates,
+ *   and administrative address components.
+ * - Identifies ambiguous queries (e.g. same name in different regions) and rejects
+ *   blindly selecting an arbitrary location.
  */
 
 import {
-  geocodeDestination,
-  GoogleRequestOptions,
-  NormalizedAddressComponent,
-  NormalizedViewport,
-  GooglePlacesRequestError
-} from './googlePlaces.js';
+  geocodeDestinationWithOsm,
+  OsmRequestOptions,
+  OsmNormalizedAddressComponent,
+  OsmNoResultsError,
+  OsmRequestError,
+  DestinationAmbiguityError
+} from './osmProvider.js';
+
+export interface NormalizedAddressComponent {
+  longName: string;
+  shortName: string;
+  types: string[];
+}
+
+export interface NormalizedViewport {
+  northeast: { lat: number; lng: number };
+  southwest: { lat: number; lng: number };
+}
 
 export interface ResolvedDestination {
   /** The raw input string entered by the user */
@@ -32,9 +44,9 @@ export interface ResolvedDestination {
   latitude: number;
   /** Longitude coordinate in decimal degrees */
   longitude: number;
-  /** Google Place ID if returned by the provider */
+  /** Provider Place ID (e.g. "osm:node/123456" or "osm:relation/78910") */
   providerPlaceId?: string;
-  /** Geocoding location type: 'ROOFTOP' | 'RANGE_INTERPOLATED' | 'GEOMETRIC_CENTER' | 'APPROXIMATE' */
+  /** Geocoding location type: 'node' | 'way' | 'relation' | 'APPROXIMATE' */
   locationType?: string;
   /** Breakdown of administrative address components */
   addressComponents: NormalizedAddressComponent[];
@@ -42,80 +54,50 @@ export interface ResolvedDestination {
   viewport?: NormalizedViewport;
 }
 
-/**
- * Derives a clean canonical destination name from address components.
- * Prioritizes locality -> postal_town -> administrative_area_level_2 -> first address segment.
- */
-function deriveCanonicalName(
-  formattedAddress: string,
-  components: NormalizedAddressComponent[]
-): string {
-  const locality = components.find((c) => c.types.includes('locality'));
-  if (locality?.longName?.trim()) {
-    return locality.longName.trim();
-  }
-
-  const sublocality = components.find((c) => c.types.includes('sublocality') || c.types.includes('sublocality_level_1'));
-  if (sublocality?.longName?.trim()) {
-    return sublocality.longName.trim();
-  }
-
-  const postalTown = components.find((c) => c.types.includes('postal_town'));
-  if (postalTown?.longName?.trim()) {
-    return postalTown.longName.trim();
-  }
-
-  const admin2 = components.find((c) => c.types.includes('administrative_area_level_2'));
-  if (admin2?.longName?.trim()) {
-    return admin2.longName.trim();
-  }
-
-  const admin1 = components.find((c) => c.types.includes('administrative_area_level_1'));
-  if (admin1?.longName?.trim()) {
-    return admin1.longName.trim();
-  }
-
-  const firstSegment = formattedAddress.split(',')[0]?.trim();
-  return firstSegment || formattedAddress;
-}
+export { DestinationAmbiguityError, OsmNoResultsError };
 
 /**
  * Resolves an arbitrary destination string to a canonical geographic anchor.
  *
- * @param destination User-provided destination string (e.g. "Chandekasare", "Shirdi", "Pune")
+ * @param destination User-provided destination string (e.g. "Chandekasare", "Shirdi", "Pune", "Mumbai")
  * @param options Optional timeout, abort signal, or fetch override (for unit testing)
  * @returns Normalized resolved destination object
- * @throws GooglePlacesRequestError if input is empty or request is invalid
- * @throws GooglePlacesNoResultsError if the destination cannot be resolved
- * @throws GooglePlacesRateLimitError if quota is exceeded
  */
 export async function resolveDestination(
   destination: string,
-  options: GoogleRequestOptions = {}
+  options: OsmRequestOptions = {}
 ): Promise<ResolvedDestination> {
   const cleanInput = destination?.trim();
   if (!cleanInput) {
-    throw new GooglePlacesRequestError('Destination query cannot be empty or blank.', 400);
+    throw new OsmRequestError('Destination query cannot be empty or blank.', 400);
   }
 
-  const geocode = await geocodeDestination(cleanInput, options);
+  const geocode = await geocodeDestinationWithOsm(cleanInput, options);
 
-  const canonicalName = deriveCanonicalName(geocode.formattedAddress, geocode.addressComponents);
+  let viewport: NormalizedViewport | undefined;
+  if (geocode.boundingbox && geocode.boundingbox.length === 4) {
+    viewport = {
+      southwest: { lat: geocode.boundingbox[0], lng: geocode.boundingbox[2] },
+      northeast: { lat: geocode.boundingbox[1], lng: geocode.boundingbox[3] }
+    };
+  }
+
+  const providerPlaceId = `osm:${geocode.osmType}/${geocode.osmId}`;
 
   console.log(
-    `[DestinationResolver Diagnostics] Query="${cleanInput}" -> Canonical="${canonicalName}", ` +
+    `[DestinationResolver Diagnostics] Query="${cleanInput}" -> Canonical="${geocode.canonicalName}", ` +
     `Coords=(${geocode.latitude.toFixed(4)}, ${geocode.longitude.toFixed(4)}), Address="${geocode.formattedAddress}"`
   );
 
   return {
     originalInput: cleanInput,
-    canonicalName,
+    canonicalName: geocode.canonicalName,
     formattedAddress: geocode.formattedAddress,
     latitude: geocode.latitude,
     longitude: geocode.longitude,
-    providerPlaceId: geocode.providerPlaceId,
-    locationType: geocode.locationType,
+    providerPlaceId,
+    locationType: geocode.osmType,
     addressComponents: geocode.addressComponents,
-    viewport: geocode.viewport
+    viewport
   };
 }

@@ -1,18 +1,19 @@
 /**
  * Deterministic Place Catalog Builder for TravelGenie.
  *
- * Constructs a verified place catalog backed strictly by Google Places API (New)
- * data, using radial concentric search tiers (5km -> 15km -> 25km) and
- * strict entity deduplication.
+ * Constructs a verified place catalog backed strictly by OpenStreetMap (Overpass API)
+ * data, using geodesic distance calculations, radial concentric locality tiers
+ * (exact_destination <= 5km -> nearby <= 15km -> nearest_town <= 25km),
+ * and strict entity deduplication.
  *
  * CORE INTEGRITY RULES:
- * 1. Every VerifiedPlace originates from a Google Places provider response.
- * 2. Every VerifiedPlace has a valid providerPlaceId, name, and coordinates.
- * 3. Zero fake places are generated (no template interpolation or fake village entities).
+ * 1. Every VerifiedPlace originates from an authentic OpenStreetMap provider response.
+ * 2. Every VerifiedPlace has a valid providerPlaceId (osm:type/id), name, and coordinates.
+ * 3. Zero fake places are generated (no template interpolation or hallucinated entities).
  * 4. Missing fields remain strictly null; no guessed values.
- * 5. Prices are NOT estimated in this phase (priceStatus is PRICE_LEVEL_ONLY or
- *    PRICE_UNAVAILABLE, estimatedPriceInrRange is null).
+ * 5. Prices and ratings are NEVER invented (priceStatus is PRICE_UNAVAILABLE, rating is null).
  * 6. Rural destinations return honest counts (e.g. 0 accommodations if none exist).
+ * 7. Source attribution "OpenStreetMap contributors" is preserved on all entities.
  */
 
 import {
@@ -23,21 +24,15 @@ import {
 } from '../types.js';
 import { calculateDistanceMeters } from './geo.js';
 import {
-  InternalGooglePlace,
-  GoogleRequestOptions,
-  searchPlacesNearby,
-  searchPlacesByText
-} from './googlePlaces.js';
+  InternalOsmPlace,
+  OsmRequestOptions,
+  searchOsmPlacesNearby
+} from './osmProvider.js';
 import { ResolvedDestination } from './destinationResolver.js';
 
 // ============================================================================
 // Configurable Search Constants & Tiers
 // ============================================================================
-
-export const MIN_ACCOMMODATION_RESULTS = 3;
-export const MIN_ATTRACTION_RESULTS = 4;
-export const MIN_RESTAURANT_RESULTS = 3;
-export const MIN_ACTIVITY_RESULTS = 2;
 
 export const RADIUS_TIER_1_METERS = 5000;   // 5 km: Exact destination settlement
 export const RADIUS_TIER_2_METERS = 15000;  // 15 km: Nearby outskirts
@@ -50,10 +45,51 @@ export const DEFAULT_SEARCH_RADII = [
   RADIUS_TIER_3_METERS
 ];
 
-// ============================================================================
-// Google Place Types by Category (Places API New Table A)
-// ============================================================================
+// OpenStreetMap tags reference constants
+export const OSM_ACCOMMODATION_TAGS = [
+  'hotel',
+  'guest_house',
+  'resort',
+  'motel',
+  'hostel',
+  'bed_and_breakfast',
+  'apartment'
+];
 
+export const OSM_ATTRACTION_TAGS = [
+  'attraction',
+  'museum',
+  'theme_park',
+  'viewpoint',
+  'monument',
+  'memorial',
+  'castle',
+  'fort',
+  'park',
+  'garden',
+  'place_of_worship'
+];
+
+export const OSM_RESTAURANT_TAGS = [
+  'restaurant',
+  'cafe',
+  'bakery',
+  'fast_food',
+  'food_court',
+  'bar',
+  'pub'
+];
+
+export const OSM_ACTIVITY_TAGS = [
+  'water_park',
+  'sports_centre',
+  'cinema',
+  'theatre',
+  'bowling_alley',
+  'arts_centre'
+];
+
+// Backward-compatible tag list aliases for legacy tests and providers
 export const ACCOMMODATION_PLACE_TYPES = [
   'hotel',
   'lodging',
@@ -89,16 +125,16 @@ export const ACTIVITY_PLACE_TYPES = [
   'campground',
   'sports_complex',
   'bowling_alley',
-  'movie_theater',
-  'community_center'
+  'movie_theater'
 ];
 
 // ============================================================================
 // Types & Options
 // ============================================================================
 
-export interface CatalogBuilderOptions extends GoogleRequestOptions {
+export interface CatalogBuilderOptions extends OsmRequestOptions {
   customRadii?: number[];
+  maxRadiusMeters?: number;
   minAccommodation?: number;
   minAttractions?: number;
   minRestaurants?: number;
@@ -120,6 +156,7 @@ export interface VerifiedPlaceCatalog {
     generatedAt: string;
     searchRadiiMeters: number[];
     totalVerifiedPlaces: number;
+    dataSource: string;
   };
 }
 
@@ -144,12 +181,12 @@ export function determineLocalityRelation(distanceMeters: number): LocalityRelat
 }
 
 /**
- * Converts a raw InternalGooglePlace into a normalized VerifiedPlace.
+ * Converts a raw InternalOsmPlace into a normalized VerifiedPlace.
  * Returns null if the place violates data integrity constraints
  * (missing Place ID, missing name, non-finite coordinates, or out of 25km radius).
  */
 export function toVerifiedPlace(
-  place: InternalGooglePlace,
+  place: InternalOsmPlace,
   destinationAnchor: { latitude: number; longitude: number },
   primaryCategory: PlacePrimaryCategory,
   internalIdIndex: number,
@@ -197,19 +234,20 @@ export function toVerifiedPlace(
   }
 
   const localityRelation = determineLocalityRelation(distanceMeters);
-
-  // Price Status: In Phase 2A, do NOT calculate prices.
-  // Use PRICE_LEVEL_ONLY if Google provided priceLevel, else PRICE_UNAVAILABLE.
-  const priceStatus: PriceStatus = place.priceLevel && place.priceLevel.trim()
-    ? 'PRICE_LEVEL_ONLY'
-    : 'PRICE_UNAVAILABLE';
+  const isGoogle = (place as any).provider === 'google_places' || !!(place as any).googleMapsUri || (place as any).rating !== undefined;
+  const provider = (place as any).provider || (isGoogle ? 'google_places' : 'openstreetmap');
+  const rating = typeof (place as any).rating === 'number' ? (place as any).rating : null;
+  const userRatingCount = typeof (place as any).userRatingCount === 'number' ? (place as any).userRatingCount : null;
+  const googleMapsUri = (place as any).googleMapsUri?.trim() || null;
+  const priceLevel = (place as any).priceLevel || null;
+  const priceStatus: PriceStatus = (place as any).priceStatus || (priceLevel ? 'PRICE_LEVEL_ONLY' : 'PRICE_UNAVAILABLE');
 
   // Format internal ID deterministically: VP_01, VP_02, ...
   const internalId = `VP_${String(internalIdIndex).padStart(2, '0')}`;
 
   return {
     internalId,
-    provider: 'google_places',
+    provider,
     providerPlaceId: placeId,
     name,
     primaryCategory,
@@ -221,18 +259,17 @@ export function toVerifiedPlace(
     },
     distanceMeters,
     localityRelation,
-    rating: typeof place.rating === 'number' && Number.isFinite(place.rating) ? place.rating : null,
-    userRatingCount: typeof place.userRatingCount === 'number' && Number.isInteger(place.userRatingCount)
-      ? place.userRatingCount
-      : null,
-    googleMapsUri: place.googleMapsUri?.trim() || null,
+    rating,
+    userRatingCount,
+    googleMapsUri,
     websiteUri: place.websiteUri?.trim() || null,
     phoneNumber: place.phoneNumber?.trim() || null,
     openingHours: Array.isArray(place.openingHours) ? [...place.openingHours] : null,
-    priceLevel: place.priceLevel?.trim() || null,
+    priceLevel,
     priceStatus,
-    estimatedPriceInrRange: null, // Strictly null per Phase 2A requirement
-    verificationTimestamp
+    estimatedPriceInrRange: null,
+    verificationTimestamp,
+    attribution: place.attribution || (isGoogle ? 'Google' : 'OpenStreetMap contributors')
   };
 }
 
@@ -240,9 +277,7 @@ export function toVerifiedPlace(
  * Deterministic comparator for ranking verified places within a category:
  * 1. Locality relation priority (exact_destination < nearby < nearest_town)
  * 2. Closer distanceMeters within the same locality tier
- * 3. Rating descending (places with rating before places without)
- * 4. User review count descending
- * 5. Name alphabetical, then providerPlaceId as final deterministic tie-breaker
+ * 3. Name alphabetical, then providerPlaceId as final deterministic tie-breaker
  */
 export function compareVerifiedPlaces(a: VerifiedPlace, b: VerifiedPlace): number {
   const localityWeight: Record<LocalityRelation, number> = {
@@ -251,82 +286,22 @@ export function compareVerifiedPlaces(a: VerifiedPlace, b: VerifiedPlace): numbe
     nearest_town: 2
   };
 
-  const localityDiff = localityWeight[a.localityRelation] - localityWeight[b.localityRelation];
-  if (localityDiff !== 0) {
-    return localityDiff;
+  const weightA = localityWeight[a.localityRelation] ?? 99;
+  const weightB = localityWeight[b.localityRelation] ?? 99;
+  if (weightA !== weightB) {
+    return weightA - weightB;
   }
 
   if (a.distanceMeters !== b.distanceMeters) {
     return a.distanceMeters - b.distanceMeters;
   }
 
-  const aRating = a.rating ?? -1;
-  const bRating = b.rating ?? -1;
-  if (aRating !== bRating) {
-    return bRating - aRating;
-  }
-
-  const aCount = a.userRatingCount ?? -1;
-  const bCount = b.userRatingCount ?? -1;
-  if (aCount !== bCount) {
-    return bCount - aCount;
-  }
-
-  const nameDiff = a.name.localeCompare(b.name);
-  if (nameDiff !== 0) {
-    return nameDiff;
+  const nameCmp = a.name.localeCompare(b.name);
+  if (nameCmp !== 0) {
+    return nameCmp;
   }
 
   return a.providerPlaceId.localeCompare(b.providerPlaceId);
-}
-
-// ============================================================================
-// Core Category Search Functions
-// ============================================================================
-
-/**
- * Executes tiered concentric search for a specific category until the minimum
- * target count is met or the maximum search radius (25 km) is reached.
- */
-async function searchCategoryWithExpansion(
-  destinationAnchor: { latitude: number; longitude: number },
-  searchFn: (radiusMeters: number) => Promise<InternalGooglePlace[]>,
-  minTargetCount: number,
-  radii: number[],
-  categoryName = 'places'
-): Promise<InternalGooglePlace[]> {
-  const seenPlaceIds = new Set<string>();
-  const collectedPlaces: InternalGooglePlace[] = [];
-
-  for (const radius of radii) {
-    // If we already have enough verified places from closer tiers, stop expanding
-    if (collectedPlaces.length >= minTargetCount) {
-      break;
-    }
-
-    try {
-      const placesAtRadius = await searchFn(radius);
-      const newlyAdded: string[] = [];
-      for (const place of placesAtRadius) {
-        if (place?.providerPlaceId && !seenPlaceIds.has(place.providerPlaceId)) {
-          seenPlaceIds.add(place.providerPlaceId);
-          collectedPlaces.push(place);
-          newlyAdded.push(place.name);
-        }
-      }
-      console.log(
-        `[PlaceCatalog Diagnostics] Category="${categoryName}", tier=${radius}m: ` +
-        `rawCount=${placesAtRadius.length}, newlyAdded=${newlyAdded.length}, cumulativeTotal=${collectedPlaces.length}. ` +
-        `Sample: [${newlyAdded.slice(0, 3).join(', ')}]`
-      );
-    } catch (err) {
-      const safeErrorMsg = err instanceof Error ? err.message : String(err);
-      // In case of an individual tier network blip, continue with existing collected places
-      console.warn(`[PlaceCatalog Diagnostics] Category="${categoryName}", tier=${radius}m ERROR: ${safeErrorMsg}`);
-    }
-  }
-
-  return collectedPlaces;
 }
 
 // ============================================================================
@@ -334,10 +309,10 @@ async function searchCategoryWithExpansion(
 // ============================================================================
 
 /**
- * Builds a deterministic verified place catalog for a resolved destination.
+ * Builds a deterministic verified place catalog for a resolved destination using OpenStreetMap data.
  *
  * @param destination ResolvedDestination from destinationResolver
- * @param options Optional builder options (custom radii, minimum targets, timeout, mock fetch)
+ * @param options Optional builder options (custom radii, timeout, mock fetch)
  * @returns Fully populated, deduplicated, and ranked VerifiedPlaceCatalog
  */
 export async function buildVerifiedPlaceCatalog(
@@ -353,133 +328,38 @@ export async function buildVerifiedPlaceCatalog(
     longitude: destination.longitude
   };
 
-  const radii = options.customRadii && options.customRadii.length > 0
-    ? options.customRadii.filter((r) => r > 0 && r <= MAX_SEARCH_RADIUS_METERS)
-    : DEFAULT_SEARCH_RADII;
-
-  const minAccom = options.minAccommodation ?? MIN_ACCOMMODATION_RESULTS;
-  const minAttr = options.minAttractions ?? MIN_ATTRACTION_RESULTS;
-  const minRest = options.minRestaurants ?? MIN_RESTAURANT_RESULTS;
-  const minAct = options.minActivities ?? MIN_ACTIVITY_RESULTS;
-
+  const maxRadius = Math.min(options.maxRadiusMeters || MAX_SEARCH_RADIUS_METERS, MAX_SEARCH_RADIUS_METERS);
+  const radii = options.customRadii || (options.maxRadiusMeters ? [options.maxRadiusMeters] : DEFAULT_SEARCH_RADII);
   const verificationTimestamp = options.verificationTimestamp || new Date().toISOString();
 
-  // Forward GoogleRequestOptions (signal, timeoutMs, fetchFn) to provider calls
-  const requestOpts: GoogleRequestOptions = {
-    signal: options.signal,
-    timeoutMs: options.timeoutMs,
-    fetchFn: options.fetchFn
-  };
-
-  // --------------------------------------------------------------------------
-  // 1. Accommodation Search
-  // --------------------------------------------------------------------------
-  const rawAccommodations = await searchCategoryWithExpansion(
-    anchor,
-    (radiusMeters) =>
-      searchPlacesNearby(
+  // Query OpenStreetMap data via Overpass API (concentric expansion from 5km to 25km)
+  let rawPlaces: InternalOsmPlace[] = [];
+  for (const r of radii) {
+    const boundedRadius = Math.min(r, maxRadius);
+    try {
+      const placesAtTier = await searchOsmPlacesNearby(
         {
           coordinates: anchor,
-          radiusMeters,
-          includedTypes: ACCOMMODATION_PLACE_TYPES
+          radiusMeters: boundedRadius,
+          maxResults: 300
         },
-        requestOpts
-      ),
-    minAccom,
-    radii,
-    'accommodation'
-  );
-
-  // --------------------------------------------------------------------------
-  // 2. Attractions Search
-  // --------------------------------------------------------------------------
-  const rawAttractions = await searchCategoryWithExpansion(
-    anchor,
-    (radiusMeters) =>
-      searchPlacesNearby(
-        {
-          coordinates: anchor,
-          radiusMeters,
-          includedTypes: ATTRACTION_PLACE_TYPES
-        },
-        requestOpts
-      ),
-    minAttr,
-    radii,
-    'attraction'
-  );
-
-  // --------------------------------------------------------------------------
-  // 3. Restaurants / Dining Search
-  // --------------------------------------------------------------------------
-  const rawRestaurants = await searchCategoryWithExpansion(
-    anchor,
-    (radiusMeters) =>
-      searchPlacesNearby(
-        {
-          coordinates: anchor,
-          radiusMeters,
-          includedTypes: RESTAURANT_PLACE_TYPES
-        },
-        requestOpts
-      ),
-    minRest,
-    radii,
-    'restaurant'
-  );
-
-  // --------------------------------------------------------------------------
-  // 4. Activities Search (Nearby activity POIs + location-biased text search)
-  // --------------------------------------------------------------------------
-  const rawActivities = await searchCategoryWithExpansion(
-    anchor,
-    async (radiusMeters) => {
-      // First try nearby activity types
-      const nearbyActs = await searchPlacesNearby(
-        {
-          coordinates: anchor,
-          radiusMeters,
-          includedTypes: ACTIVITY_PLACE_TYPES
-        },
-        requestOpts
+        options
       );
 
-      // If nearby returns few, supplement with location-biased text search
-      if (nearbyActs.length < minAct) {
-        try {
-          const textActs = await searchPlacesByText(
-            {
-              textQuery: `things to do near ${destination.canonicalName}`,
-              center: anchor,
-              radiusMeters,
-              maxResultCount: 5
-            },
-            requestOpts
-          );
-          const combined = [...nearbyActs];
-          const existingIds = new Set(nearbyActs.map((p) => p.providerPlaceId));
-          for (const act of textActs) {
-            if (act.providerPlaceId && !existingIds.has(act.providerPlaceId)) {
-              existingIds.add(act.providerPlaceId);
-              combined.push(act);
-            }
-          }
-          return combined;
-        } catch {
-          return nearbyActs;
-        }
+      if (placesAtTier.length > 0) {
+        rawPlaces = placesAtTier;
       }
-      return nearbyActs;
-    },
-    minAct,
-    radii,
-    'activity'
-  );
 
-  // --------------------------------------------------------------------------
-  // 5. Global Deduplication & Category Mapping
-  // --------------------------------------------------------------------------
-  const globalSeenPlaceIds = new Set<string>();
+      // If we found sufficient places at this tier, stop to avoid unnecessary wide queries
+      if (rawPlaces.length >= 8 || boundedRadius >= maxRadius) {
+        break;
+      }
+    } catch (err: any) {
+      console.warn(`[PlaceCatalog Diagnostics] OpenStreetMap search at ${boundedRadius}m failed for "${destination.canonicalName}": ${err.message}`);
+      if (rawPlaces.length > 0) break;
+    }
+  }
+
   const byCategory: VerifiedPlaceCatalog['byCategory'] = {
     accommodation: [],
     attraction: [],
@@ -488,77 +368,59 @@ export async function buildVerifiedPlaceCatalog(
     poi: []
   };
 
-  let globalIdCounter = 1;
+  const seenPlaceIds = new Set<string>();
+  const seenPlaceSignatures = new Set<string>();
+  let tempIndex = 1;
 
-  // Process a raw list for a specific primary category
-  const processCategoryList = (
-    rawList: InternalGooglePlace[],
-    category: PlacePrimaryCategory
-  ) => {
-    for (const rawPlace of rawList) {
-      if (!rawPlace?.providerPlaceId) continue;
-      if (globalSeenPlaceIds.has(rawPlace.providerPlaceId)) continue;
-
-      const verified = toVerifiedPlace(
-        rawPlace,
-        anchor,
-        category,
-        globalIdCounter,
-        verificationTimestamp
-      );
-
-      if (verified) {
-        globalSeenPlaceIds.add(verified.providerPlaceId);
-        globalIdCounter++;
-        byCategory[category].push(verified);
-      }
+  for (const raw of rawPlaces) {
+    if (!raw.providerPlaceId || seenPlaceIds.has(raw.providerPlaceId)) {
+      continue;
     }
-  };
 
-  // Process categories in prioritized order
-  processCategoryList(rawAccommodations, 'accommodation');
-  processCategoryList(rawAttractions, 'attraction');
-  processCategoryList(rawRestaurants, 'restaurant');
-  processCategoryList(rawActivities, 'activity');
+    // Name + distance deduplication (prevents duplicate nodes/ways for same venue)
+    const normName = raw.name.toLowerCase().trim();
+    const signature = `${normName}_${Math.round(raw.latitude * 1000)}_${Math.round(raw.longitude * 1000)}`;
+    if (seenPlaceSignatures.has(signature)) {
+      continue;
+    }
 
-  // Any remaining attractions with specific landmark types can populate poi
-  for (const attr of byCategory.attraction) {
-    if (
-      attr.types.includes('historical_landmark') ||
-      attr.types.includes('natural_feature') ||
-      attr.types.includes('point_of_interest')
-    ) {
-      byCategory.poi.push(attr);
+    const category: PlacePrimaryCategory = raw.categoryHint || 'attraction';
+    const verified = toVerifiedPlace(
+      raw,
+      anchor,
+      category,
+      tempIndex++,
+      verificationTimestamp
+    );
+
+    if (verified) {
+      seenPlaceIds.add(raw.providerPlaceId);
+      seenPlaceSignatures.add(signature);
+      byCategory[category].push(verified);
     }
   }
 
-  // --------------------------------------------------------------------------
-  // 6. Deterministic Sorting within Categories
-  // --------------------------------------------------------------------------
-  byCategory.accommodation.sort(compareVerifiedPlaces);
-  byCategory.attraction.sort(compareVerifiedPlaces);
-  byCategory.restaurant.sort(compareVerifiedPlaces);
-  byCategory.activity.sort(compareVerifiedPlaces);
-  byCategory.poi.sort(compareVerifiedPlaces);
+  // Sort each category deterministically
+  for (const category of Object.keys(byCategory) as PlacePrimaryCategory[]) {
+    byCategory[category].sort(compareVerifiedPlaces);
+  }
 
-  // --------------------------------------------------------------------------
-  // 7. Master Place List with Clean Sequential IDs
-  // --------------------------------------------------------------------------
-  // Collect all unique verified places into a master array
+  // Combine into master list in strict category order
   const allPlaces: VerifiedPlace[] = [
     ...byCategory.accommodation,
     ...byCategory.attraction,
     ...byCategory.restaurant,
-    ...byCategory.activity
+    ...byCategory.activity,
+    ...byCategory.poi
   ];
 
-  // Re-index internal IDs sequentially across the master list for perfect consistency
+  // Re-index internal IDs sequentially across the master list
   allPlaces.forEach((place, idx) => {
     place.internalId = `VP_${String(idx + 1).padStart(2, '0')}`;
   });
 
   console.log(
-    `[PlaceCatalog Diagnostics] Catalog completed for "${destination.canonicalName}" (${anchor.latitude.toFixed(4)}, ${anchor.longitude.toFixed(4)}): ` +
+    `[PlaceCatalog Diagnostics] OSM Catalog completed for "${destination.canonicalName}" (${anchor.latitude.toFixed(4)}, ${anchor.longitude.toFixed(4)}): ` +
     `accommodations=${byCategory.accommodation.length}, attractions=${byCategory.attraction.length}, ` +
     `restaurants=${byCategory.restaurant.length}, activities=${byCategory.activity.length}, totalVerifiedPlaces=${allPlaces.length}`
   );
@@ -569,8 +431,9 @@ export async function buildVerifiedPlaceCatalog(
     byCategory,
     metadata: {
       generatedAt: verificationTimestamp,
-      searchRadiiMeters: radii,
-      totalVerifiedPlaces: allPlaces.length
+      searchRadiiMeters: [maxRadius],
+      totalVerifiedPlaces: allPlaces.length,
+      dataSource: 'OpenStreetMap (ODbL)'
     }
   };
 }
@@ -583,6 +446,7 @@ export function formatCatalogForPrompt(catalog: VerifiedPlaceCatalog): string {
   const lines: string[] = [
     `Destination Anchor: ${catalog.destination.canonicalName} (${catalog.destination.latitude.toFixed(4)}, ${catalog.destination.longitude.toFixed(4)})`,
     `Address: ${catalog.destination.formattedAddress}`,
+    `Data Source: OpenStreetMap contributors (ODbL)`,
     ''
   ];
 
@@ -599,11 +463,11 @@ export function formatCatalogForPrompt(catalog: VerifiedPlaceCatalog): string {
           `Address: ${p.formattedAddress || 'N/A'}`,
           `Locality: ${p.localityRelation} (~${(p.distanceMeters / 1000).toFixed(1)} km from anchor)`
         ];
-        if (p.rating !== null) {
-          parts.push(`Rating: ${p.rating}${p.userRatingCount ? ` (${p.userRatingCount} reviews)` : ''}`);
+        if (p.types && p.types.length > 0) {
+          parts.push(`Tags: [${p.types.slice(0, 3).join(', ')}]`);
         }
-        if (p.priceLevel) {
-          parts.push(`Price Tier: ${p.priceLevel}`);
+        if (p.openingHours && p.openingHours.length > 0) {
+          parts.push(`Hours: "${p.openingHours[0]}"`);
         }
         lines.push(`  - ${parts.join(' | ')}`);
       }
@@ -618,4 +482,3 @@ export function formatCatalogForPrompt(catalog: VerifiedPlaceCatalog): string {
 
   return lines.join('\n').trim();
 }
-

@@ -31,6 +31,7 @@ export interface TravelPlan {
   weatherAdvice: string;
   budgetTips: string[];
   itinerary: DayPlan[];
+  includeDayByDayItinerary?: boolean;
   generatedAt?: string;
 }
 
@@ -46,6 +47,7 @@ export interface TripFormData {
   accommodationPreference: AccommodationType;
   activityLevel: ActivityLevelType;
   additionalNotes: string;
+  includeDayByDayItinerary?: boolean;
 }
 
 export interface ApiResponse<T> {
@@ -83,6 +85,7 @@ export interface SavedItineraryDetail {
   accommodationPreference: AccommodationType;
   activityLevel: ActivityLevelType;
   additionalNotes: string | null;
+  includeDayByDayItinerary?: boolean;
   plan: TravelPlan;
   createdAt: string;
   updatedAt: string;

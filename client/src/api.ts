@@ -9,7 +9,8 @@ export async function generateTravelPlan(formData: TripFormData): Promise<{ plan
     interests: formData.interests,
     accommodationPreference: formData.accommodationPreference,
     activityLevel: formData.activityLevel,
-    additionalNotes: formData.additionalNotes.trim() || undefined
+    additionalNotes: formData.additionalNotes.trim() || undefined,
+    includeDayByDayItinerary: formData.includeDayByDayItinerary !== undefined ? formData.includeDayByDayItinerary : true
   };
 
   let response: Response;
@@ -61,7 +62,8 @@ export async function modifyTravelPlan(
       interests: originalDetails.interests,
       accommodationPreference: originalDetails.accommodationPreference,
       activityLevel: originalDetails.activityLevel,
-      additionalNotes: originalDetails.additionalNotes.trim() || undefined
+      additionalNotes: originalDetails.additionalNotes.trim() || undefined,
+      includeDayByDayItinerary: originalDetails.includeDayByDayItinerary !== undefined ? originalDetails.includeDayByDayItinerary : true
     },
     currentPlan,
     modificationRequest: modificationRequest.trim()

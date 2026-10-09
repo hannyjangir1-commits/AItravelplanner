@@ -104,6 +104,15 @@ export function validateGeneratePlanRequest(input: any): ValidationResult<Genera
     cleanNotes = trimmedNotes || undefined;
   }
 
+  // 9. Include Day-by-Day Itinerary: optional boolean (defaults to true)
+  let includeItinerary = true;
+  if (input.includeDayByDayItinerary !== undefined && input.includeDayByDayItinerary !== null) {
+    if (typeof input.includeDayByDayItinerary !== 'boolean') {
+      return { isValid: false, error: 'includeDayByDayItinerary must be a boolean.' };
+    }
+    includeItinerary = input.includeDayByDayItinerary;
+  }
+
   return {
     isValid: true,
     data: {
@@ -114,7 +123,8 @@ export function validateGeneratePlanRequest(input: any): ValidationResult<Genera
       interests: cleanInterests,
       accommodationPreference: accommodation,
       activityLevel: activity,
-      additionalNotes: cleanNotes
+      additionalNotes: cleanNotes,
+      includeDayByDayItinerary: includeItinerary
     }
   };
 }
@@ -127,7 +137,7 @@ function sanitizeCurrentPlan(plan: any): TravelPlan | null {
     return null;
   }
 
-  if (!Array.isArray(plan.itinerary) || plan.itinerary.length < 1 || plan.itinerary.length > 30) {
+  if (!Array.isArray(plan.itinerary) || plan.itinerary.length > 30) {
     return null;
   }
 
@@ -141,8 +151,11 @@ function sanitizeCurrentPlan(plan: any): TravelPlan | null {
     sanitizedItinerary.push({
       day: dayNum,
       morning: typeof item.morning === 'string' ? item.morning.slice(0, 2000) : '',
+      morningPlaceId: typeof item.morningPlaceId === 'string' && item.morningPlaceId.trim() ? item.morningPlaceId.slice(0, 100) : undefined,
       afternoon: typeof item.afternoon === 'string' ? item.afternoon.slice(0, 2000) : '',
+      afternoonPlaceId: typeof item.afternoonPlaceId === 'string' && item.afternoonPlaceId.trim() ? item.afternoonPlaceId.slice(0, 100) : undefined,
       evening: typeof item.evening === 'string' ? item.evening.slice(0, 2000) : '',
+      eveningPlaceId: typeof item.eveningPlaceId === 'string' && item.eveningPlaceId.trim() ? item.eveningPlaceId.slice(0, 100) : undefined,
       notes: typeof item.notes === 'string' ? item.notes.slice(0, 1000) : '',
       alternative: typeof item.alternative === 'string' ? item.alternative.slice(0, 1000) : ''
     });
@@ -195,6 +208,9 @@ function sanitizeCurrentPlan(plan: any): TravelPlan | null {
     : 'Check seasonal weather forecasts before departure.';
 
   const generatedAt = typeof plan.generatedAt === 'string' ? plan.generatedAt.slice(0, 50) : undefined;
+  const includeDayByDayItinerary = typeof plan.includeDayByDayItinerary === 'boolean'
+    ? plan.includeDayByDayItinerary
+    : sanitizedItinerary.length > 0;
 
   return {
     accommodationGuidance,
@@ -204,6 +220,7 @@ function sanitizeCurrentPlan(plan: any): TravelPlan | null {
     weatherAdvice,
     budgetTips,
     itinerary: sanitizedItinerary,
+    includeDayByDayItinerary,
     generatedAt
   };
 }

@@ -576,6 +576,9 @@ export function validateAndSanitizeTravelPlan(
   // ==========================================================================
   sanitizedPlan.resolvedDestination = verifiedCatalog.destination;
   sanitizedPlan.verifiedPlacesCatalog = verifiedCatalog.places;
+  sanitizedPlan.includeDayByDayItinerary = typeof plan.includeDayByDayItinerary === 'boolean'
+    ? plan.includeDayByDayItinerary
+    : (Array.isArray(sanitizedPlan.itinerary) && sanitizedPlan.itinerary.length > 0);
 
   return {
     plan: sanitizedPlan,

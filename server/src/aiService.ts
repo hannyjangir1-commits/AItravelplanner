@@ -17,9 +17,9 @@ import {
   formatCatalogForPrompt
 } from './services/placeCatalog.js';
 import {
-  GooglePlacesConfigError,
-  GooglePlacesNoResultsError
-} from './services/googlePlaces.js';
+  OsmNoResultsError,
+  DestinationAmbiguityError
+} from './services/destinationResolver.js';
 import {
   validateAndSanitizeTravelPlan,
   TravelPlanValidationReport
@@ -1030,59 +1030,63 @@ export function generateCatalogGroundedFallback(
 
   // Build day-by-day itinerary strictly referencing verified places
   const itinerary: DayPlan[] = [];
-  let attractionIndex = 0;
-  let restaurantIndex = 0;
-  let activityIndex = 0;
+  const shouldIncludeItinerary = req.includeDayByDayItinerary !== false;
 
-  for (let i = 1; i <= days; i++) {
-    let morningText: string;
-    let morningPlaceId: string | undefined = undefined;
-    if (attractions.length > 0) {
-      const attr = attractions[attractionIndex % attractions.length];
-      attractionIndex++;
-      const distKm = (attr.distanceMeters / 1000).toFixed(1);
-      const distNote = attr.localityRelation === 'exact_destination' ? '' : ` (~${distKm} km away)`;
-      morningText = `Day ${i} Morning: Visit verified landmark [${attr.name}]${distNote}. Explore the surroundings and take in the morning ambiance.`;
-      morningPlaceId = attr.internalId;
-    } else {
-      morningText = `Day ${i} Morning: Leisurely arrival and orientation walk around ${dest}. Savor fresh morning tea at a local stall.`;
+  if (shouldIncludeItinerary) {
+    let attractionIndex = 0;
+    let restaurantIndex = 0;
+    let activityIndex = 0;
+
+    for (let i = 1; i <= days; i++) {
+      let morningText: string;
+      let morningPlaceId: string | undefined = undefined;
+      if (attractions.length > 0) {
+        const attr = attractions[attractionIndex % attractions.length];
+        attractionIndex++;
+        const distKm = (attr.distanceMeters / 1000).toFixed(1);
+        const distNote = attr.localityRelation === 'exact_destination' ? '' : ` (~${distKm} km away)`;
+        morningText = `Day ${i} Morning: Visit verified landmark [${attr.name}]${distNote}. Explore the surroundings and take in the morning ambiance.`;
+        morningPlaceId = attr.internalId;
+      } else {
+        morningText = `Day ${i} Morning: Leisurely arrival and orientation walk around ${dest}. Savor fresh morning tea at a local stall.`;
+      }
+
+      let afternoonText: string;
+      let afternoonPlaceId: string | undefined = undefined;
+      if (restaurants.length > 0) {
+        const rest = restaurants[restaurantIndex % restaurants.length];
+        restaurantIndex++;
+        const distKm = (rest.distanceMeters / 1000).toFixed(1);
+        const distNote = rest.localityRelation === 'exact_destination' ? '' : ` (~${distKm} km away)`;
+        afternoonText = `Day ${i} Afternoon: Lunch break at verified establishment [${rest.name}]${distNote}, sampling regional flavors within your ${dailyBudgetFmt} daily target.`;
+        afternoonPlaceId = rest.internalId;
+      } else {
+        afternoonText = `Day ${i} Afternoon: Enjoy authentic regional lunch and rest during peak afternoon hours.`;
+      }
+
+      let eveningText: string;
+      let eveningPlaceId: string | undefined = undefined;
+      if (activities.length > 0) {
+        const act = activities[activityIndex % activities.length];
+        activityIndex++;
+        eveningText = `Day ${i} Evening: Visit [${act.name}] for evening recreation, followed by an unhurried dinner.`;
+        eveningPlaceId = act.internalId;
+      } else {
+        eveningText = `Day ${i} Evening: Relaxing twilight stroll around ${dest}. Savor a wholesome local dinner.`;
+      }
+
+      itinerary.push({
+        day: i,
+        morning: morningText,
+        morningPlaceId,
+        afternoon: afternoonText,
+        afternoonPlaceId,
+        evening: eveningText,
+        eveningPlaceId,
+        notes: `Keep local currency for small vendors and verify transit availability when traveling outside village centers.`,
+        alternative: `Quiet indoor rest, reading, or relaxing near your stay.`
+      });
     }
-
-    let afternoonText: string;
-    let afternoonPlaceId: string | undefined = undefined;
-    if (restaurants.length > 0) {
-      const rest = restaurants[restaurantIndex % restaurants.length];
-      restaurantIndex++;
-      const distKm = (rest.distanceMeters / 1000).toFixed(1);
-      const distNote = rest.localityRelation === 'exact_destination' ? '' : ` (~${distKm} km away)`;
-      afternoonText = `Day ${i} Afternoon: Lunch break at verified establishment [${rest.name}]${distNote}, sampling regional flavors within your ${dailyBudgetFmt} daily target.`;
-      afternoonPlaceId = rest.internalId;
-    } else {
-      afternoonText = `Day ${i} Afternoon: Enjoy authentic regional lunch and rest during peak afternoon hours.`;
-    }
-
-    let eveningText: string;
-    let eveningPlaceId: string | undefined = undefined;
-    if (activities.length > 0) {
-      const act = activities[activityIndex % activities.length];
-      activityIndex++;
-      eveningText = `Day ${i} Evening: Visit [${act.name}] for evening recreation, followed by an unhurried dinner.`;
-      eveningPlaceId = act.internalId;
-    } else {
-      eveningText = `Day ${i} Evening: Relaxing twilight stroll around ${dest}. Savor a wholesome local dinner.`;
-    }
-
-    itinerary.push({
-      day: i,
-      morning: morningText,
-      morningPlaceId,
-      afternoon: afternoonText,
-      afternoonPlaceId,
-      evening: eveningText,
-      eveningPlaceId,
-      notes: `Keep local currency for small vendors and verify transit availability when traveling outside village centers.`,
-      alternative: `Quiet indoor rest, reading, or relaxing near your stay.`
-    });
   }
 
   return {
@@ -1097,6 +1101,7 @@ export function generateCatalogGroundedFallback(
       `Support local family-run eateries for authentic taste at modest prices.`
     ],
     itinerary,
+    includeDayByDayItinerary: shouldIncludeItinerary,
     generatedAt: new Date().toISOString(),
     resolvedDestination: catalog.destination,
     verifiedPlacesCatalog: catalog.places
@@ -1116,14 +1121,7 @@ export async function generateTravelPlanService(
   request: GeneratePlanRequest,
   options: GeneratePlanServiceOptions = {}
 ): Promise<{ plan: TravelPlan; isDemo: boolean; message?: string }> {
-  // 1. Resolve destination to authoritative geographic search anchor
-  const isGoogleMapsConfigured = Boolean(
-    process.env.GOOGLE_MAPS_API_KEY &&
-    process.env.GOOGLE_MAPS_API_KEY.trim() &&
-    process.env.GOOGLE_MAPS_API_KEY !== 'your_google_maps_api_key_here'
-  );
-  console.log(`[Places Service Diagnostics] GOOGLE_MAPS_API_KEY is ${isGoogleMapsConfigured ? 'CONFIGURED' : 'NOT CONFIGURED'}.`);
-
+  // 1. Resolve destination to authoritative geographic search anchor via OpenStreetMap
   let resolvedDest: ResolvedDestination;
   if (options.catalogOverride) {
     resolvedDest = options.catalogOverride.destination;
@@ -1135,24 +1133,23 @@ export async function generateTravelPlanService(
         fetchFn: options.fetchFn
       });
     } catch (destErr: any) {
-      if (destErr instanceof GooglePlacesNoResultsError) {
+      if (destErr instanceof DestinationAmbiguityError) {
+        throw new Error(destErr.message);
+      }
+      if (destErr instanceof OsmNoResultsError) {
         throw new Error(
           `Unable to locate destination "${request.destination}". Please verify the spelling or specify the district/state.`
         );
       }
-      if (destErr instanceof GooglePlacesConfigError) {
-        console.warn('[Places Service Diagnostics] GOOGLE_MAPS_API_KEY not configured. Proceeding with ungrounded fallback notice.');
-        resolvedDest = {
-          originalInput: request.destination,
-          canonicalName: request.destination,
-          formattedAddress: request.destination,
-          latitude: 0,
-          longitude: 0,
-          addressComponents: []
-        };
-      } else {
-        throw destErr;
-      }
+      console.warn(`[DestinationResolver Diagnostics] Failed to resolve "${request.destination}": ${destErr.message}`);
+      resolvedDest = {
+        originalInput: request.destination,
+        canonicalName: request.destination,
+        formattedAddress: request.destination,
+        latitude: 0,
+        longitude: 0,
+        addressComponents: []
+      };
     }
   }
 
@@ -1171,7 +1168,7 @@ export async function generateTravelPlanService(
         destination: resolvedDest,
         places: [],
         byCategory: { accommodation: [], attraction: [], restaurant: [], activity: [], poi: [] },
-        metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0 }
+        metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0, dataSource: 'OpenStreetMap (ODbL)' }
       };
     }
   } else {
@@ -1179,7 +1176,7 @@ export async function generateTravelPlanService(
       destination: resolvedDest,
       places: [],
       byCategory: { accommodation: [], attraction: [], restaurant: [], activity: [], poi: [] },
-      metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0 }
+      metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0, dataSource: 'OpenStreetMap (ODbL)' }
     };
   }
 
@@ -1211,7 +1208,11 @@ ${request.additionalNotes ? `- Additional Notes / Preferences: ${request.additio
 ${formattedCatalog}
 </verified_places_catalog>
 
-CRITICAL DURATION REQUIREMENT: You MUST include full day-by-day plans for all ${request.numberOfDays} days (day 1 to day ${request.numberOfDays}) in the "itinerary" array.
+${
+  request.includeDayByDayItinerary === false
+    ? `CRITICAL ITINERARY REQUIREMENT: The user has chosen NOT to generate a day-by-day itinerary schedule. You MUST set the "itinerary" array to an empty array: "itinerary": []. Do NOT output any daily schedules.`
+    : `CRITICAL DURATION REQUIREMENT: You MUST include full day-by-day plans for all ${request.numberOfDays} days (day 1 to day ${request.numberOfDays}) in the "itinerary" array.`
+}
 
 CRITICAL GROUNDING REQUIREMENT:
 - You must select places EXCLUSIVELY from <verified_places_catalog>.
@@ -1224,16 +1225,24 @@ You must return ONLY a valid JSON object strictly matching this format:
 ${GROUNDED_JSON_SCHEMA_EXAMPLE}
 `;
 
+  const shouldIncludeItinerary = request.includeDayByDayItinerary !== false;
+
   try {
     const rawAiResponse = await callGemini(GROUNDED_SYSTEM_PROMPT, userPrompt, options.fetchFn);
     const parsedPlan = cleanAndParseJSON(rawAiResponse);
 
-    // If AI returned fewer days than requested, complete the missing days with grounded themes
-    if (parsedPlan.itinerary.length < request.numberOfDays) {
-      const groundedFallback = generateCatalogGroundedFallback(request, catalog);
-      for (let i = parsedPlan.itinerary.length; i < request.numberOfDays; i++) {
-        if (groundedFallback.itinerary[i]) {
-          parsedPlan.itinerary.push({ ...groundedFallback.itinerary[i] });
+    if (!shouldIncludeItinerary) {
+      parsedPlan.itinerary = [];
+      parsedPlan.includeDayByDayItinerary = false;
+    } else {
+      parsedPlan.includeDayByDayItinerary = true;
+      // If AI returned fewer days than requested, complete the missing days with grounded themes
+      if (parsedPlan.itinerary.length < request.numberOfDays) {
+        const groundedFallback = generateCatalogGroundedFallback(request, catalog);
+        for (let i = parsedPlan.itinerary.length; i < request.numberOfDays; i++) {
+          if (groundedFallback.itinerary[i]) {
+            parsedPlan.itinerary.push({ ...groundedFallback.itinerary[i] });
+          }
         }
       }
     }
@@ -1246,16 +1255,22 @@ ${GROUNDED_JSON_SCHEMA_EXAMPLE}
     const { plan: validatedPlan, validationReport } = validateAndSanitizeTravelPlan(parsedPlan, catalog);
     console.log('[TravelPlan Validator] Report:', JSON.stringify(validationReport));
 
+    const hasVerified = catalog.places.length > 0;
+    const planMessage = hasVerified
+      ? `Plan generated successfully with ${catalog.places.length} verified OpenStreetMap places.`
+      : `Sparse or limited place data found within search area for ${catalog.destination.canonicalName}. Plan generated with verified destination guidance.`;
+
     return {
       plan: validatedPlan,
       isDemo: false,
-      message: 'Plan generated successfully with verified real-world places.'
+      message: planMessage
     };
   } catch (error: any) {
     const safeErrorMsg = redactApiKey(error?.message || 'Unknown error');
     console.warn('[Gemini Service] Fallback activated. Reason:', safeErrorMsg);
 
     const fallbackPlan = generateCatalogGroundedFallback(request, catalog);
+    fallbackPlan.includeDayByDayItinerary = shouldIncludeItinerary;
     if (!fallbackPlan.generatedAt) {
       fallbackPlan.generatedAt = new Date().toISOString();
     }
@@ -1301,57 +1316,62 @@ export function validateAndMergeModifiedPlan(
     return null;
   }
 
-  // Must contain an itinerary array with at least one day
-  if (!Array.isArray(parsed.itinerary) || parsed.itinerary.length === 0) {
-    return null;
-  }
+  const shouldIncludeItinerary = originalPlan.includeDayByDayItinerary ?? (Array.isArray(originalPlan.itinerary) && originalPlan.itinerary.length > 0);
 
-  // Validate each day in itinerary
   const validatedItinerary: DayPlan[] = [];
-  for (let i = 0; i < parsed.itinerary.length; i++) {
-    const item = parsed.itinerary[i];
-    if (!item || typeof item !== 'object') {
+
+  if (shouldIncludeItinerary) {
+    // Must contain an itinerary array with at least one day when itinerary was expected
+    if (!Array.isArray(parsed.itinerary) || parsed.itinerary.length === 0) {
       return null;
     }
-    const dayNumber = Number(item.day) || (i + 1);
-    const fallbackDay = originalPlan.itinerary[i] || originalPlan.itinerary[0];
 
-    validatedItinerary.push({
-      day: dayNumber,
-      morning:
-        typeof item.morning === 'string' && item.morning.trim() !== ''
-          ? item.morning
-          : fallbackDay?.morning || 'Morning exploration and sightseeing',
-      morningPlaceId:
-        typeof item.morningPlaceId === 'string' && item.morningPlaceId.trim()
-          ? item.morningPlaceId.trim()
-          : fallbackDay?.morningPlaceId,
-      afternoon:
-        typeof item.afternoon === 'string' && item.afternoon.trim() !== ''
-          ? item.afternoon
-          : fallbackDay?.afternoon || 'Afternoon discovery and local dining',
-      afternoonPlaceId:
-        typeof item.afternoonPlaceId === 'string' && item.afternoonPlaceId.trim()
-          ? item.afternoonPlaceId.trim()
-          : fallbackDay?.afternoonPlaceId,
-      evening:
-        typeof item.evening === 'string' && item.evening.trim() !== ''
-          ? item.evening
-          : fallbackDay?.evening || 'Evening cultural activity and dinner',
-      eveningPlaceId:
-        typeof item.eveningPlaceId === 'string' && item.eveningPlaceId.trim()
-          ? item.eveningPlaceId.trim()
-          : fallbackDay?.eveningPlaceId,
-      notes: typeof item.notes === 'string' ? item.notes : fallbackDay?.notes || '',
-      alternative:
-        typeof item.alternative === 'string' ? item.alternative : fallbackDay?.alternative || ''
-    });
-  }
+    // Validate each day in itinerary
+    for (let i = 0; i < parsed.itinerary.length; i++) {
+      const item = parsed.itinerary[i];
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+      const dayNumber = Number(item.day) || (i + 1);
+      const fallbackDay = originalPlan.itinerary[i] || originalPlan.itinerary[0];
 
-  // Preserve any missing days if model accidentally returned fewer days than the original plan
-  if (validatedItinerary.length < expectedDays && originalPlan.itinerary.length >= expectedDays) {
-    for (let i = validatedItinerary.length; i < expectedDays; i++) {
-      validatedItinerary.push({ ...originalPlan.itinerary[i] });
+      validatedItinerary.push({
+        day: dayNumber,
+        morning:
+          typeof item.morning === 'string' && item.morning.trim() !== ''
+            ? item.morning
+            : fallbackDay?.morning || 'Morning exploration and sightseeing',
+        morningPlaceId:
+          typeof item.morningPlaceId === 'string' && item.morningPlaceId.trim()
+            ? item.morningPlaceId.trim()
+            : fallbackDay?.morningPlaceId,
+        afternoon:
+          typeof item.afternoon === 'string' && item.afternoon.trim() !== ''
+            ? item.afternoon
+            : fallbackDay?.afternoon || 'Afternoon discovery and local dining',
+        afternoonPlaceId:
+          typeof item.afternoonPlaceId === 'string' && item.afternoonPlaceId.trim()
+            ? item.afternoonPlaceId.trim()
+            : fallbackDay?.afternoonPlaceId,
+        evening:
+          typeof item.evening === 'string' && item.evening.trim() !== ''
+            ? item.evening
+            : fallbackDay?.evening || 'Evening cultural activity and dinner',
+        eveningPlaceId:
+          typeof item.eveningPlaceId === 'string' && item.eveningPlaceId.trim()
+            ? item.eveningPlaceId.trim()
+            : fallbackDay?.eveningPlaceId,
+        notes: typeof item.notes === 'string' ? item.notes : fallbackDay?.notes || '',
+        alternative:
+          typeof item.alternative === 'string' ? item.alternative : fallbackDay?.alternative || ''
+      });
+    }
+
+    // Preserve any missing days if model accidentally returned fewer days than the original plan
+    if (validatedItinerary.length < expectedDays && originalPlan.itinerary.length >= expectedDays) {
+      for (let i = validatedItinerary.length; i < expectedDays; i++) {
+        validatedItinerary.push({ ...originalPlan.itinerary[i] });
+      }
     }
   }
 
@@ -1412,7 +1432,8 @@ export function validateAndMergeModifiedPlan(
     activities,
     weatherAdvice,
     budgetTips,
-    itinerary: validatedItinerary
+    itinerary: validatedItinerary,
+    includeDayByDayItinerary: shouldIncludeItinerary
   };
 }
 
@@ -1449,7 +1470,8 @@ export async function modifyTravelPlanService(
       metadata: {
         generatedAt: new Date().toISOString(),
         searchRadiiMeters: [5000, 15000, 25000],
-        totalVerifiedPlaces: places.length
+        totalVerifiedPlaces: places.length,
+        dataSource: 'OpenStreetMap (ODbL)'
       }
     };
   } else {
@@ -1470,12 +1492,14 @@ export async function modifyTravelPlanService(
         },
         places: [],
         byCategory: { accommodation: [], attraction: [], restaurant: [], activity: [], poi: [] },
-        metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0 }
+        metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0, dataSource: 'OpenStreetMap (ODbL)' }
       };
     }
   }
 
   const formattedCatalog = formatCatalogForPrompt(catalog);
+
+  const hadItinerary = request.currentPlan.includeDayByDayItinerary ?? (Array.isArray(request.currentPlan.itinerary) && request.currentPlan.itinerary.length > 0);
 
   const modifyInstruction = `You are an expert AI Travel Planner modifying an existing destination travel plan.
 Apply the user's modification request thoughtfully to the relevant sections of the plan (e.g. adjust activities, pacing, budget tips, accommodations, dining, or day schedules as appropriate).
@@ -1485,7 +1509,11 @@ CRITICAL REQUIREMENTS:
 2. DO NOT return only a partial plan, a diff, notes, or explanations outside the JSON object.
 3. Preserve all days, places, and details from the current plan that are NOT directly affected by this modification request.
 4. Keep the duration (${request.originalDetails.numberOfDays} days) and destination (${catalog.destination.canonicalName || request.originalDetails.destination}) consistent unless explicitly requested otherwise.
-5. All recommendations must select places EXCLUSIVELY from <verified_places_catalog>. Never invent places.`;
+5. All recommendations must select places EXCLUSIVELY from <verified_places_catalog>. Never invent places.${
+  !hadItinerary
+    ? '\n6. The current plan does NOT have a day-by-day itinerary schedule (itinerary is []). Keep "itinerary": [] unless the user explicitly requested to add a daily schedule.'
+    : ''
+}`;
 
   const userPrompt = `
 ${modifyInstruction}

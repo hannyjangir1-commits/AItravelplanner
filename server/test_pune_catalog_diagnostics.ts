@@ -28,6 +28,7 @@ import {
   ACTIVITY_PLACE_TYPES
 } from './src/services/placeCatalog.js';
 import { validateAndSanitizeTravelPlan } from './src/services/travelPlanValidator.js';
+import { clearOsmCache } from './src/services/osmProvider.js';
 import { TravelPlan } from './src/types.js';
 
 let testCount = 0;
@@ -226,25 +227,63 @@ function createPuneMockFetch(options: { simulateTableBErrorOnWorship?: boolean }
       // ignore
     }
 
-    // Geocoding
-    if (urlStr.includes('/geocode/json')) {
+    // Geocoding (Nominatim or Google)
+    if (urlStr.includes('nominatim') || urlStr.includes('/geocode/json')) {
       return new Response(
-        JSON.stringify({
-          status: 'OK',
-          results: [
-            {
-              place_id: PUNE_RESOLVED.providerPlaceId,
-              formatted_address: PUNE_RESOLVED.formattedAddress,
-              geometry: {
-                location: { lat: PUNE_RESOLVED.latitude, lng: PUNE_RESOLVED.longitude },
-                location_type: 'APPROXIMATE'
-              },
-              address_components: PUNE_RESOLVED.addressComponents
+        JSON.stringify([
+          {
+            place_id: 12345,
+            osm_type: 'relation',
+            osm_id: 67890,
+            lat: '18.5204',
+            lon: '73.8567',
+            display_name: 'Pune, Maharashtra, India',
+            name: 'Pune',
+            boundingbox: ['18.4', '18.6', '73.7', '73.9'],
+            address: {
+              city: 'Pune',
+              state: 'Maharashtra',
+              country: 'India'
             }
-          ]
-        }),
+          }
+        ]),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Overpass API Query
+    if (urlStr.includes('overpass') || urlStr.includes('interpreter')) {
+      const elements = [
+        ...RAW_PUNE_ATTRACTIONS.map(p => ({
+          type: 'node',
+          id: p.id,
+          lat: p.location.latitude,
+          lon: p.location.longitude,
+          tags: { name: p.displayName.text, tourism: 'attraction' }
+        })),
+        ...RAW_PUNE_HOTELS.map(p => ({
+          type: 'node',
+          id: p.id,
+          lat: p.location.latitude,
+          lon: p.location.longitude,
+          tags: { name: p.displayName.text, tourism: 'hotel' }
+        })),
+        ...RAW_PUNE_RESTAURANTS.map(p => ({
+          type: 'node',
+          id: p.id,
+          lat: p.location.latitude,
+          lon: p.location.longitude,
+          tags: { name: p.displayName.text, amenity: 'restaurant' }
+        })),
+        ...RAW_PUNE_ACTIVITIES.map(p => ({
+          type: 'node',
+          id: p.id,
+          lat: p.location.latitude,
+          lon: p.location.longitude,
+          tags: { name: p.displayName.text, leisure: 'water_park' }
+        }))
+      ];
+      return new Response(JSON.stringify({ elements }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
 
     // Places API: Search Nearby
@@ -323,7 +362,7 @@ async function runDiagnosticsSuite() {
     assert.equal(dest.formattedAddress, 'Pune, Maharashtra, India');
     assert.ok(Math.abs(dest.latitude - 18.5204) < 0.001);
     assert.ok(Math.abs(dest.longitude - 73.8567) < 0.001);
-    assert.equal(dest.providerPlaceId, PUNE_RESOLVED.providerPlaceId);
+    assert.ok(dest.providerPlaceId === PUNE_RESOLVED.providerPlaceId || dest.providerPlaceId?.startsWith('osm:'));
   });
 
   // --------------------------------------------------------------------------
@@ -451,6 +490,7 @@ async function runDiagnosticsSuite() {
   console.log('\n--- Stage 5: End-to-End Pune Catalog Generation ---');
 
   await test('5.1 Full catalog pipeline builds 12 verified places for Pune', async () => {
+    clearOsmCache();
     const mockFetch = createPuneMockFetch();
     const catalog = await buildVerifiedPlaceCatalog(PUNE_RESOLVED, { fetchFn: mockFetch as any });
 
@@ -489,67 +529,39 @@ async function runDiagnosticsSuite() {
   console.log('\n--- Stage 6: Shirdi and Chandekasare Verification ---');
 
   await test('6.1 Shirdi catalog returns religious attractions and hotels honestly', async () => {
+    clearOsmCache();
     const shirdiFetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      const urlStr = url.toString();
-      const bodyJson = JSON.parse((init?.body as string) || '{}');
-      if (urlStr.includes('/places:searchNearby')) {
-        const types: string[] = bodyJson.includedTypes || [];
-        if (types.some(t => ATTRACTION_PLACE_TYPES.includes(t))) {
-          return new Response(JSON.stringify({
-            places: [
-              {
-                id: 'ChIJ_shirdi_temple',
-                displayName: { text: 'Shri Saibaba Sansthan Temple', languageCode: 'en' },
-                formattedAddress: 'Shirdi, Maharashtra',
-                location: { latitude: 19.7666, longitude: 74.4760 },
-                types: ['hindu_temple', 'tourist_attraction'],
-                rating: 4.8,
-                userRatingCount: 65000
-              },
-              {
-                id: 'ChIJ_dwarkamai',
-                displayName: { text: 'Dwarkamai', languageCode: 'en' },
-                formattedAddress: 'Shirdi, Maharashtra',
-                location: { latitude: 19.7664, longitude: 74.4763 },
-                types: ['hindu_temple', 'historical_landmark'],
-                rating: 4.7,
-                userRatingCount: 12000
-              }
-            ]
-          }), { status: 200 });
+      const elements = [
+        {
+          type: 'node',
+          id: 101,
+          lat: 19.7666,
+          lon: 74.4760,
+          tags: { name: 'Shri Saibaba Sansthan Temple', amenity: 'place_of_worship', religion: 'hindu' }
+        },
+        {
+          type: 'node',
+          id: 102,
+          lat: 19.7664,
+          lon: 74.4763,
+          tags: { name: 'Dwarkamai', historic: 'monument' }
+        },
+        {
+          type: 'node',
+          id: 103,
+          lat: 19.7712,
+          lon: 74.4735,
+          tags: { name: 'Sun-n-Sand Shirdi', tourism: 'hotel' }
+        },
+        {
+          type: 'node',
+          id: 104,
+          lat: 19.7660,
+          lon: 74.4770,
+          tags: { name: 'Sai Sagar Food Court', amenity: 'restaurant' }
         }
-        if (types.some(t => ACCOMMODATION_PLACE_TYPES.includes(t))) {
-          return new Response(JSON.stringify({
-            places: [
-              {
-                id: 'ChIJ_hotel_sun_sand',
-                displayName: { text: 'Sun-n-Sand Shirdi', languageCode: 'en' },
-                formattedAddress: 'Shirdi, Maharashtra',
-                location: { latitude: 19.7712, longitude: 74.4735 },
-                types: ['hotel', 'resort_hotel'],
-                rating: 4.3,
-                userRatingCount: 4200
-              }
-            ]
-          }), { status: 200 });
-        }
-        if (types.some(t => RESTAURANT_PLACE_TYPES.includes(t))) {
-          return new Response(JSON.stringify({
-            places: [
-              {
-                id: 'ChIJ_rest_sai_sagar',
-                displayName: { text: 'Sai Sagar Food Court', languageCode: 'en' },
-                formattedAddress: 'Shirdi, Maharashtra',
-                location: { latitude: 19.7660, longitude: 74.4770 },
-                types: ['restaurant'],
-                rating: 4.1,
-                userRatingCount: 2300
-              }
-            ]
-          }), { status: 200 });
-        }
-      }
-      return new Response(JSON.stringify({ places: [] }), { status: 200 });
+      ];
+      return new Response(JSON.stringify({ elements }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
 
     const catalog = await buildVerifiedPlaceCatalog(SHIRDI_RESOLVED, { fetchFn: shirdiFetch as any });
@@ -562,28 +574,18 @@ async function runDiagnosticsSuite() {
   });
 
   await test('6.2 Chandekasare rural honesty: 1 attraction, 0 accommodation, 0 fabricated places', async () => {
+    clearOsmCache();
     const chandeFetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      const urlStr = url.toString();
-      const bodyJson = JSON.parse((init?.body as string) || '{}');
-      if (urlStr.includes('/places:searchNearby')) {
-        const types: string[] = bodyJson.includedTypes || [];
-        if (types.some(t => ATTRACTION_PLACE_TYPES.includes(t))) {
-          return new Response(JSON.stringify({
-            places: [
-              {
-                id: 'ChIJ_renuka_mata',
-                displayName: { text: 'Shri Renuka Mata Mandir', languageCode: 'en' },
-                formattedAddress: 'Chandekasare, Maharashtra',
-                location: { latitude: 19.8660, longitude: 74.4820 },
-                types: ['hindu_temple'],
-                rating: 4.6,
-                userRatingCount: 85
-              }
-            ]
-          }), { status: 200 });
+      const elements = [
+        {
+          type: 'node',
+          id: 201,
+          lat: 19.8660,
+          lon: 74.4820,
+          tags: { name: 'Shri Renuka Mata Mandir', amenity: 'place_of_worship', religion: 'hindu' }
         }
-      }
-      return new Response(JSON.stringify({ places: [] }), { status: 200 });
+      ];
+      return new Response(JSON.stringify({ elements }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
 
     const catalog = await buildVerifiedPlaceCatalog(CHANDEKASARE_RESOLVED, { fetchFn: chandeFetch as any });
@@ -599,6 +601,7 @@ async function runDiagnosticsSuite() {
   console.log('\n--- Stage 7: Validator Safety Integrity ---');
 
   await test('7.1 Validator preserves verified Pune places and strips any unverified hallucination', async () => {
+    clearOsmCache();
     const mockFetch = createPuneMockFetch();
     const catalog = await buildVerifiedPlaceCatalog(PUNE_RESOLVED, { fetchFn: mockFetch as any });
 
