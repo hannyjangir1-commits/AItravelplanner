@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { pool } from '../db.js';
 import { GeneratePlanRequest, TravelPlan } from '../types.js';
 
@@ -5,6 +6,24 @@ export interface SavedTravelPlanResult {
   id: string;
   createdAt: string;
 }
+
+interface InMemoryPlan {
+  id: string;
+  userId: string;
+  destination: string;
+  numberOfDays: number;
+  budgetInr: number;
+  numberOfTravellers: number;
+  interests: string[];
+  accommodationPreference: string;
+  activityLevel: string;
+  additionalNotes: string | null;
+  planData: TravelPlan;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const memPlans = new Map<string, InMemoryPlan>();
 
 /**
  * Inserts a successfully generated travel plan into the PostgreSQL travel_plans table.
@@ -50,6 +69,30 @@ export async function saveTravelPlan(
       ? plan.includeDayByDayItinerary
       : (details.includeDayByDayItinerary ?? (Array.isArray(plan.itinerary) && plan.itinerary.length > 0))
   };
+
+  if (!process.env.DATABASE_URL) {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    memPlans.set(id, {
+      id,
+      userId: userId.trim(),
+      destination: details.destination.trim(),
+      numberOfDays: details.numberOfDays,
+      budgetInr: details.budgetInr,
+      numberOfTravellers: details.numberOfTravellers,
+      interests: details.interests || [],
+      accommodationPreference: details.accommodationPreference,
+      activityLevel: details.activityLevel,
+      additionalNotes: details.additionalNotes ? details.additionalNotes.trim() : null,
+      planData: planToSave,
+      createdAt: now,
+      updatedAt: now
+    });
+    return {
+      id,
+      createdAt: now
+    };
+  }
 
   const values = [
     userId.trim(),
@@ -101,6 +144,19 @@ interface TravelPlanSummaryRow {
 export async function getTravelPlansByUserId(userId: string): Promise<CompactItinerarySummary[]> {
   if (!userId || typeof userId !== 'string' || userId.trim() === '') {
     throw new Error('Valid authenticated user ID is required to fetch travel plans.');
+  }
+
+  if (!process.env.DATABASE_URL) {
+    return Array.from(memPlans.values())
+      .filter((p) => p.userId === userId.trim())
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((p) => ({
+        id: p.id,
+        destination: p.destination,
+        numberOfDays: p.numberOfDays,
+        numberOfTravellers: p.numberOfTravellers,
+        createdAt: p.createdAt
+      }));
   }
 
   const querySql = `
@@ -170,6 +226,28 @@ export async function getTravelPlanByIdForUser(
   }
   if (!userId || typeof userId !== 'string' || userId.trim() === '') {
     throw new Error('Valid authenticated user ID is required.');
+  }
+
+  if (!process.env.DATABASE_URL) {
+    const p = memPlans.get(id.trim());
+    if (!p || p.userId !== userId.trim()) {
+      return null;
+    }
+    return {
+      id: p.id,
+      destination: p.destination,
+      numberOfDays: p.numberOfDays,
+      budgetInr: p.budgetInr,
+      numberOfTravellers: p.numberOfTravellers,
+      interests: p.interests,
+      accommodationPreference: p.accommodationPreference,
+      activityLevel: p.activityLevel,
+      additionalNotes: p.additionalNotes,
+      includeDayByDayItinerary: p.planData.includeDayByDayItinerary ?? (Array.isArray(p.planData.itinerary) && p.planData.itinerary.length > 0),
+      plan: p.planData,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt
+    };
   }
 
   const querySql = `

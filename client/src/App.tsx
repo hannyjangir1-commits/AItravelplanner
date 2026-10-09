@@ -132,6 +132,13 @@ export function App() {
     setIsLoading(true);
     setErrorMessage(null);
 
+    // Immediately clear previous plan display and session storage so previous/stale results never linger
+    setCurrentPlan(null);
+    setCurrentTripDetails(null);
+    setIsDemoPlan(false);
+    setPlanMessage(null);
+    clearAppSessionStorage();
+
     try {
       const response = await generateTravelPlan(formData);
       setCurrentPlan(response.plan);

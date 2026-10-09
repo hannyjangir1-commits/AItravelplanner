@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { pool } from '../db.js';
 
 export interface UserRecord {
@@ -30,12 +31,34 @@ interface UserDbRow {
   place: string | null;
 }
 
+// In-memory store when DATABASE_URL is not configured (e.g. local dev / testing)
+const memUsers = new Map<string, UserWithPassword & { email?: string | null; profilePicture?: string | null }>();
+
 /**
  * Creates a new user record in PostgreSQL with a hashed password.
  * Guaranteed unique username.
  * Never returns password_hash to callers.
  */
 export async function createUser(username: string, passwordHash: string): Promise<UserRecord> {
+  if (!process.env.DATABASE_URL) {
+    const id = randomUUID();
+    const cleanUsername = username.trim();
+    const record: UserWithPassword = {
+      id,
+      username: cleanUsername,
+      passwordHash,
+      name: null,
+      place: null
+    };
+    memUsers.set(id, record);
+    return {
+      id,
+      username: cleanUsername,
+      name: null,
+      place: null
+    };
+  }
+
   const insertSql = `
     INSERT INTO users (username, password_hash)
     VALUES ($1, $2)
@@ -56,6 +79,16 @@ export async function createUser(username: string, passwordHash: string): Promis
  * Only used internally for sign-in comparison.
  */
 export async function getUserByUsername(username: string): Promise<UserWithPassword | null> {
+  if (!process.env.DATABASE_URL) {
+    const target = username.trim().toLowerCase();
+    for (const u of memUsers.values()) {
+      if (u.username.toLowerCase() === target) {
+        return { ...u };
+      }
+    }
+    return null;
+  }
+
   const sql = `
     SELECT id, username, password_hash, name, place
     FROM users
@@ -84,6 +117,19 @@ export async function getUserByUsername(username: string): Promise<UserWithPassw
  * Never exposes password_hash.
  */
 export async function getUserById(id: string): Promise<UserRecord | null> {
+  if (!process.env.DATABASE_URL) {
+    const u = memUsers.get(id);
+    if (!u) return null;
+    return {
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      place: u.place,
+      email: u.email || null,
+      profilePicture: u.profilePicture || null
+    };
+  }
+
   const getUserSql = `
     SELECT id, username, name, place, email, profile_picture
     FROM users
@@ -134,6 +180,19 @@ export async function updateUserProfile(
     nameValue = name !== undefined ? name : null;
     updatePlace = place !== undefined;
     placeValue = place !== undefined ? place : null;
+  }
+
+  if (!process.env.DATABASE_URL) {
+    const u = memUsers.get(id);
+    if (!u) return null;
+    if (updateName) u.name = nameValue;
+    if (updatePlace) u.place = placeValue;
+    return {
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      place: u.place
+    };
   }
 
   const updateSql = `

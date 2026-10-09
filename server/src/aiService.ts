@@ -1,3 +1,6 @@
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first');
+
 import {
   TravelPlan,
   GeneratePlanRequest,
@@ -197,10 +200,19 @@ function redactApiKey(message: string, key?: string): string {
   return sanitized;
 }
 
+export interface CleanAndParseOptions {
+  requireItinerary?: boolean;
+  expectedDays?: number;
+}
+
 /**
- * Clean and parse JSON from AI response, removing any markdown code blocks and trailing noise
+ * Clean and parse JSON from AI response, removing any markdown code blocks and trailing noise.
+ * Safely accepts itinerary: [] when requireItinerary is false.
  */
-function cleanAndParseJSON(rawText: string): TravelPlan {
+export function cleanAndParseJSON(
+  rawText: string,
+  options: CleanAndParseOptions = {}
+): TravelPlan {
   if (!rawText || typeof rawText !== 'string' || rawText.trim() === '') {
     throw new Error('AI response is empty or non-string.');
   }
@@ -224,9 +236,22 @@ function cleanAndParseJSON(rawText: string): TravelPlan {
     throw new Error('AI response JSON is not a valid structured object.');
   }
 
-  // Validate that a non-empty itinerary schedule was provided
-  if (!Array.isArray(parsed.itinerary) || parsed.itinerary.length === 0) {
-    throw new Error('AI response did not contain a valid itinerary schedule array.');
+  const shouldRequireItinerary = options.requireItinerary !== false;
+
+  if (shouldRequireItinerary) {
+    if (!Array.isArray(parsed.itinerary) || parsed.itinerary.length === 0) {
+      throw new Error('AI response did not contain a valid itinerary schedule array.');
+    }
+    if (options.expectedDays && parsed.itinerary.length !== options.expectedDays) {
+      throw new Error(
+        `AI response returned ${parsed.itinerary.length} day(s) of itinerary schedule, but ${options.expectedDays} day(s) were requested.`
+      );
+    }
+  } else {
+    if (!Array.isArray(parsed.itinerary)) {
+      parsed.itinerary = [];
+    }
+    parsed.includeDayByDayItinerary = false;
   }
 
   // Validate and provide defaults for critical fields
@@ -263,32 +288,44 @@ function cleanAndParseJSON(rawText: string): TravelPlan {
       reason: typeof a.reason === 'string' ? a.reason.trim() : ''
     }));
 
-  // Normalize itinerary days and preserve day place IDs
-  parsed.itinerary = parsed.itinerary.map((d: any, idx: number) => ({
-    day: Number(d.day) || (idx + 1),
-    morning: typeof d.morning === 'string' ? d.morning.trim() : '',
-    morningPlaceId: typeof d.morningPlaceId === 'string' && d.morningPlaceId.trim() ? d.morningPlaceId.trim() : undefined,
-    afternoon: typeof d.afternoon === 'string' ? d.afternoon.trim() : '',
-    afternoonPlaceId: typeof d.afternoonPlaceId === 'string' && d.afternoonPlaceId.trim() ? d.afternoonPlaceId.trim() : undefined,
-    evening: typeof d.evening === 'string' ? d.evening.trim() : '',
-    eveningPlaceId: typeof d.eveningPlaceId === 'string' && d.eveningPlaceId.trim() ? d.eveningPlaceId.trim() : undefined,
-    notes: typeof d.notes === 'string' ? d.notes.trim() : '',
-    alternative: typeof d.alternative === 'string' ? d.alternative.trim() : ''
-  }));
+  if (shouldRequireItinerary) {
+    for (let i = 0; i < parsed.itinerary.length; i++) {
+      const d = parsed.itinerary[i];
+      if (!d || typeof d !== 'object' || Array.isArray(d)) {
+        throw new Error(`AI response contains an invalid day structure at day ${i + 1}.`);
+      }
+    }
+    parsed.itinerary = parsed.itinerary.map((d: any, idx: number) => ({
+      day: Number(d.day) || (idx + 1),
+      morning: typeof d.morning === 'string' ? d.morning.trim() : '',
+      morningPlaceId: typeof d.morningPlaceId === 'string' && d.morningPlaceId.trim() ? d.morningPlaceId.trim() : undefined,
+      afternoon: typeof d.afternoon === 'string' ? d.afternoon.trim() : '',
+      afternoonPlaceId: typeof d.afternoonPlaceId === 'string' && d.afternoonPlaceId.trim() ? d.afternoonPlaceId.trim() : undefined,
+      evening: typeof d.evening === 'string' ? d.evening.trim() : '',
+      eveningPlaceId: typeof d.eveningPlaceId === 'string' && d.eveningPlaceId.trim() ? d.eveningPlaceId.trim() : undefined,
+      notes: typeof d.notes === 'string' ? d.notes.trim() : '',
+      alternative: typeof d.alternative === 'string' ? d.alternative.trim() : ''
+    }));
+    parsed.includeDayByDayItinerary = true;
+  } else {
+    parsed.itinerary = [];
+    parsed.includeDayByDayItinerary = false;
+  }
 
   return parsed as TravelPlan;
 }
 
 /**
- * Prioritized Gemini models for travel plan generation.
+ * Prioritized official Gemini models for travel plan generation.
  * Order:
- * 1. gemini-2.0-flash-lite (Primary: low latency, high throughput)
- * 2. gemini-2.0-flash      (Secondary: robust reasoning and schema adherence)
- *
- * NOTE: gemini-3.8-flash removed — returns HTTP 503 in production (BUG-08).
+ * 1. gemini-2.0-flash (Primary: low latency, high throughput, current GA)
+ * 2. gemini-2.5-flash (Secondary fallback: advanced reasoning)
  */
 export const GEMINI_MODELS = [
-  'gemini-3.1-flash-lite'
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-2.0-flash',
+  'gemini-2.5-flash'
 ] as const;
 
 export type GeminiModelName = typeof GEMINI_MODELS[number];
@@ -321,8 +358,8 @@ async function callGemini(
   }
 
   const MAX_RETRIES_PER_MODEL = 2;
-  // BUG-03: Cumulative budget — keeps the entire cascade under Render's 100s gateway limit.
-  const CUMULATIVE_BUDGET_MS = 45000;
+  // Cumulative budget — keeps the entire cascade under Render's 100s gateway limit.
+  const CUMULATIVE_BUDGET_MS = 75000;
   const MIN_REQUEST_TIMEOUT_MS = 5000; // Always give each attempt at least 5 s
   const cascadeStart = Date.now();
   let lastError = '';
@@ -426,520 +463,6 @@ async function callGemini(
   }
 
   throw new Error(`All Gemini models unavailable. Last error: ${lastError}`);
-}
-
-/**
- * Generate a high quality fallback demo plan if the user hasn't added their API key yet.
- * Supports up to 30 days consistently with varied, realistic themes and activities.
- */
-function generateDemoPlan(req: GeneratePlanRequest): TravelPlan {
-  const days = Math.min(Math.max(Number(req.numberOfDays) || 1, 1), 30);
-  const rawInterests = Array.isArray(req.interests) && req.interests.length > 0
-    ? req.interests
-    : ['Local Sightseeing', 'Cultural Heritage', 'Regional Cuisine'];
-  const interestStr = rawInterests.join(', ');
-  const dest = req.destination.trim() || 'your chosen destination';
-  const pace = (req.activityLevel || 'Moderate').toLowerCase();
-  const stay = (req.accommodationPreference || 'Moderate').toLowerCase();
-  const travellers = Number(req.numberOfTravellers) || 1;
-  const totalBudget = Number(req.budgetInr) || 0;
-  const dailyBudget = Math.round(totalBudget / days);
-  const dailyBudgetFmt = `₹${dailyBudget.toLocaleString('en-IN')}`;
-  const totalBudgetFmt = `₹${totalBudget.toLocaleString('en-IN')}`;
-
-  const DAILY_THEMES = [
-    {
-      title: 'Arrival & City Orientation',
-      morning: (d: string, _int: string, s: string) =>
-        `Day 1 Morning: Arrival in ${d}. Check into your ${s} accommodation and get acclimated. Stroll down the central avenue or civic square, enjoying a welcome coffee and fresh pastry at a popular local café.`,
-      afternoon: (_d: string) =>
-        `Day 1 Afternoon: Walk through the historic core and locate key transit hubs. Enjoy an authentic regional lunch meeting your ${dailyBudgetFmt} daily target.`,
-      evening: (d: string) =>
-        `Day 1 Evening: Relaxed sunset stroll along the illuminated promenade or plaza. Savor a traditional welcome dinner highlighting local culinary flavors of ${d}.`,
-      notes: () =>
-        `Pick up a multi-day local transit card or rechargeable travel pass at the central station to save on local commuting.`,
-      alternative: (d: string) =>
-        `Sheltered city heritage pavilion, municipal visitor center, or central covered arcade in ${d}.`
-    },
-    {
-      title: 'Historic Landmarks & Cultural Heritage',
-      morning: (d: string) =>
-        `Day 2 Morning: Early morning visit to ${d}'s most renowned architectural monument or historic citadel to enjoy cooler weather and avoid crowds.`,
-      afternoon: () =>
-        `Day 2 Afternoon: Guided or self-paced exploration of regional history museums and ancient cobblestone lanes. Pause for a classic midday meal at a heritage tavern.`,
-      evening: (d: string) =>
-        `Day 2 Evening: Sunset view from a panoramic heritage terrace, followed by dinner exploring centuries-old culinary recipes of ${d}.`,
-      notes: (p: string) =>
-        `Wear comfortable walking shoes with good traction for stone steps and uneven streets; maintain a steady ${p} pace.`,
-      alternative: (d: string) =>
-        `Enclosed municipal museum, royal palace exhibition halls, or indoor cultural archive in ${d}.`
-    },
-    {
-      title: 'Culinary Heritage & Bustling Market Discovery',
-      morning: (d: string) =>
-        `Day 3 Morning: Head to ${d}'s vibrant central morning market. Sample fresh seasonal produce, artisan cheeses, warm flatbreads, and aromatic teas.`,
-      afternoon: (_d: string, int: string) =>
-        `Day 3 Afternoon: Follow a self-guided food and culture trail focused on ${int}. Savor diverse street foods and regional snacks across bustling dining alleys.`,
-      evening: () =>
-        `Day 3 Evening: Experience the lively night bazaar or street-food hub. Taste regional desserts, savory skewers, and authentic local refreshments.`,
-      notes: () =>
-        `Carry small currency denominations for market stalls and family-run street carts that may not process digital card payments.`,
-      alternative: (d: string) =>
-        `Covered gourmet food hall, indoor cooking demonstration pavilion, or historic marketplace arcade in ${d}.`
-    },
-    {
-      title: 'Scenic Nature & Panoramic Viewpoints',
-      morning: (d: string, int: string) =>
-        `Day 4 Morning: Venture to the premier scenic overlook, hillside park, or waterfront promenade in ${d}, enjoying fresh morning air aligned with ${int}.`,
-      afternoon: (_d: string, _int: string, _s: string, p: string) =>
-        `Day 4 Afternoon: Enjoy a light picnic or casual lunch surrounded by nature, followed by a scenic trail walk or garden discovery tailored to an ${p} pace.`,
-      evening: () =>
-        `Day 4 Evening: Golden-hour sunset viewing from an elevated scenic terrace. Relax over dinner at an open-air or panoramic view dining spot.`,
-      notes: () =>
-        `Carry a reusable water bottle, sunscreen, and a light jacket as temperatures can fluctuate at elevated scenic viewpoints.`,
-      alternative: (d: string) =>
-        `Enclosed botanical glasshouse, nature center, or sheltered panoramic indoor observatory in ${d}.`
-    },
-    {
-      title: 'Art, Craftsmanship & Local Artisans',
-      morning: (d: string) =>
-        `Day 5 Morning: Explore ${d}'s distinguished fine arts museum, sculpture collection, or classical gallery celebrating both traditional and contemporary creativity.`,
-      afternoon: () =>
-        `Day 5 Afternoon: Wander through the artisan quarter, observing skilled craftsmen working with ceramics, textiles, or woodwork. Enjoy lunch at a bohemian café.`,
-      evening: (d: string) =>
-        `Day 5 Evening: Attend a local live cultural performance, folk music recital, or relax in an arts-themed lounge celebrating ${d}'s creative heritage.`,
-      notes: () =>
-        `Look out for bundled museum day passes or student/senior discount hours at major municipal cultural foundations.`,
-      alternative: (d: string) =>
-        `Artisan cooperative workshop, indoor craft emporium, or covered pottery guild studio in ${d}.`
-    },
-    {
-      title: 'Neighborhood Exploration & Hidden Alleys',
-      morning: (d: string) =>
-        `Day 6 Morning: Step away from main tourist hubs into ${d}'s character-rich residential or bohemian enclave. Discover independent bookshops and quaint roasteries.`,
-      afternoon: () =>
-        `Day 6 Afternoon: Browse quirky vintage boutiques, indie apparel ateliers, and leafy community courtyards. Savor an unhurried bistro lunch with neighborhood locals.`,
-      evening: () =>
-        `Day 6 Evening: Relax with local tea or craft beverages in a garden courtyard, followed by dinner at a cozy family-run trattoria or diner.`,
-      notes: () =>
-        `Save an offline map on your mobile phone to navigate winding residential side streets confidently without cellular connection.`,
-      alternative: (d: string) =>
-        `Historic covered arcade, antique book emporium, or indoor specialty shopping galleria in ${d}.`
-    },
-    {
-      title: 'Regional Excursion to Surrounding Outskirts',
-      morning: (d: string) =>
-        `Day 7 Morning: Take a short scenic train or shuttle ride to a picturesque satellite town, rustic hamlet, or coastal village just outside ${d}.`,
-      afternoon: () =>
-        `Day 7 Afternoon: Explore scenic countryside paths, historic castle grounds, or local orchards. Indulge in a wholesome farmhouse lunch prepared with regional harvest ingredients.`,
-      evening: (d: string, _int: string, s: string) =>
-        `Day 7 Evening: Return to ${d} by early evening. Enjoy a relaxed, comforting dinner near your ${s} accommodation.`,
-      notes: () =>
-        `Verify return transit schedules in advance to avoid long waits at regional rural stations.`,
-      alternative: (d: string) =>
-        `Outskirts thermal bath facility, indoor heritage railway museum, or covered countryside craft barn near ${d}.`
-    },
-    {
-      title: 'Spiritual Sanctuaries & Sacred Architecture',
-      morning: (d: string) =>
-        `Day 8 Morning: Visit ${d}'s venerated temples, cathedrals, or historic shrines during morning prayer and quiet contemplation.`,
-      afternoon: () =>
-        `Day 8 Afternoon: Walk through meditative cloister gardens, lotus ponds, or spiritual grounds. Enjoy a wholesome vegetarian or traditional monastic-style lunch.`,
-      evening: () =>
-        `Day 8 Evening: Sunset reflections along quiet riverbanks or shrine steps, witnessing peaceful evening lantern lighting or bell ceremonies.`,
-      notes: () =>
-        `Maintain quiet decorum in prayer spaces and verify photography permissions before capturing sacred altars.`,
-      alternative: (d: string) =>
-        `Spiritual heritage museum, sacred art treasury, or contemplative indoor library in ${d}.`
-    },
-    {
-      title: 'Photography Trails & Golden Hour Perspectives',
-      morning: (d: string, int: string) =>
-        `Day 9 Morning: Early golden-hour photo walk capturing ${d}'s dramatic morning light across iconic bridges, plazas, and silhouettes tailored to ${int}.`,
-      afternoon: () =>
-        `Day 9 Afternoon: Document colorful street life, ornate doorways, and bustling town squares. Stop for lunch at a visually inspiring garden terrace café.`,
-      evening: () =>
-        `Day 9 Evening: Blue-hour photography session from a riverside boardwalk or rooftop overlook, followed by dinner with nighttime skyline vistas.`,
-      notes: () =>
-        `Ensure camera and smartphone batteries are fully charged; bring a portable power bank for full-day photography outings.`,
-      alternative: (d: string) =>
-        `Contemporary photography gallery, indoor viewing tower, or media arts center in ${d}.`
-    },
-    {
-      title: 'Wellness, Relaxation & Café Culture',
-      morning: (d: string) =>
-        `Day 10 Morning: Unrushed morning with late breakfast at a classic sidewalk café in ${d}. Sip warm beverages and observe daily local life at an unhurried pace.`,
-      afternoon: () =>
-        `Day 10 Afternoon: Recharge body and mind at a local thermal bath, traditional spa, or peaceful shaded botanical garden. Enjoy herbal refreshments and light fare.`,
-      evening: () =>
-        `Day 10 Evening: Intimate candlelit dinner at a quiet courtyard bistro, savoring wholesome comforting seasonal dishes.`,
-      notes: () =>
-        `Advance bookings are recommended for popular wellness spas and traditional bathhouses.`,
-      alternative: (d: string) =>
-        `Indoor thermal wellness lounge, heated public baths, or quiet tearoom in ${d}.`
-    },
-    {
-      title: 'Active Outdoor Discovery & Adventure Trails',
-      morning: (d: string) =>
-        `Day 11 Morning: Energetic morning bicycle excursion along scenic riverbanks, greenway corridors, or forested ridges near ${d}.`,
-      afternoon: (_d: string, _int: string, _s: string, p: string) =>
-        `Day 11 Afternoon: Outdoor recreational activities matching your ${p} pace, such as nature hikes, kayaking, or canopy walkways. Refuel with a hearty midday meal.`,
-      evening: () =>
-        `Day 11 Evening: Casual, lively dinner at a popular local tavern or gathering spot, relaxing after an invigorating day of outdoor discovery.`,
-      notes: () =>
-        `Wear trail-appropriate footwear with sturdy traction and bring insect repellent for forested or waterside trails.`,
-      alternative: (d: string) =>
-        `Indoor climbing center, sports heritage museum, or sheltered recreation pavilion in ${d}.`
-    },
-    {
-      title: 'Architectural Marvels & Urban Heritage',
-      morning: (d: string) =>
-        `Day 12 Morning: Thematic architectural walk highlighting ${d}'s iconic bridges, historic facades, and modern landmark structures.`,
-      afternoon: () =>
-        `Day 12 Afternoon: Tour landmark civic institutions, historic guild houses, or restored mansions. Dine at an eatery situated within a repurposed historic property.`,
-      evening: (d: string) =>
-        `Day 12 Evening: Evening illumination tour admiring floodlit public buildings, grand monuments, and decorative fountains across ${d}.`,
-      notes: () =>
-        `Pick up architectural walking trail maps from the central tourist information desk.`,
-      alternative: (d: string) =>
-        `Architectural heritage center, model city museum, or indoor design exhibition hall in ${d}.`
-    },
-    {
-      title: 'Traditional Flavors & Hands-On Gastronomy',
-      morning: (d: string) =>
-        `Day 13 Morning: Interactive culinary demonstration or specialty ingredient sourcing visit at a local gourmet food boutique in ${d}.`,
-      afternoon: () =>
-        `Day 13 Afternoon: Sample freshly prepared regional pastries, artisan cheeses, or cured specialties. Savor dishes crafted with generational culinary techniques.`,
-      evening: () =>
-        `Day 13 Evening: Celebratory multi-course dinner sampling authentic regional family recipes within your planned ${totalBudgetFmt} budget.`,
-      notes: () =>
-        `Mention any dietary preferences or allergen requirements clearly when sampling artisanal culinary preparations.`,
-      alternative: (d: string) =>
-        `Covered gourmet tasting hall, indoor cooking studio, or historic wine/tea cellar in ${d}.`
-    },
-    {
-      title: 'Waterfront Charms & Scenic Waterway Cruise',
-      morning: (d: string) =>
-        `Day 14 Morning: Morning stroll along the canal piers, river quays, or harbor wharves of ${d}, watching working boats and morning marine activity.`,
-      afternoon: () =>
-        `Day 14 Afternoon: Board a scenic river ferry or harbor cruise for panoramic shoreline perspectives. Savor a light seafood or waterfront lunch.`,
-      evening: () =>
-        `Day 14 Evening: Sunset promenade along the water's edge followed by dinner at a waterfront terrace enjoying evening breezes.`,
-      notes: () =>
-        `Check boat departure schedules in advance; carry a windproof outer layer for boat decks.`,
-      alternative: (d: string) =>
-        `Maritime heritage museum, historic naval dockyard, or indoor oceanarium in ${d}.`
-    },
-    {
-      title: 'Mid-Trip Rest, Reading & Cultural Immersion',
-      morning: (_d: string, _int: string, s: string) =>
-        `Day 15 Morning: Leisurely breakfast at your ${s} stay, followed by a casual walk to a neighborhood park or quiet square.`,
-      afternoon: () =>
-        `Day 15 Afternoon: Spend a restorative afternoon browsing literature at a historic library or independent bookstore café, reviewing trip memories and photos.`,
-      evening: () =>
-        `Day 15 Evening: Comfort-food dinner at a friendly neighborhood diner, retiring early to refresh energy for the upcoming weeks.`,
-      notes: () =>
-        `Use this mid-trip interval to handle laundry and relax your legs after two weeks of active exploration.`,
-      alternative: (d: string) =>
-        `Municipal central library, independent art-house cinema, or historic reading salon in ${d}.`
-    },
-    {
-      title: 'Creative Districts & Modern Street Culture',
-      morning: (d: string) =>
-        `Day 16 Morning: Discover ${d}'s vibrant street art corridors, open-air murals, and repurposed post-industrial creative spaces.`,
-      afternoon: () =>
-        `Day 16 Afternoon: Browse independent designer ateliers, screen-printing workshops, and record stores. Enjoy lunch at an eco-conscious café.`,
-      evening: () =>
-        `Day 16 Evening: Explore a vibrant pop-up food container park or creative community market featuring live local acoustic performers.`,
-      notes: () =>
-        `Street art displays rotate frequently; feel free to ask local gallery staff for the newest mural alleys.`,
-      alternative: (d: string) =>
-        `Modern art museum, covered cultural warehouse, or indoor design institute in ${d}.`
-    },
-    {
-      title: 'Traditional Villages & Rural Traditions',
-      morning: (d: string) =>
-        `Day 17 Morning: Journey into the pastoral hills or traditional agricultural villages on the outskirts of ${d}.`,
-      afternoon: () =>
-        `Day 17 Afternoon: Walk past stone cottages, terraced orchards, and family-operated presses. Savor a slow-cooked village lunch at a rustic countryside inn.`,
-      evening: (d: string) =>
-        `Day 17 Evening: Return to ${d} as dusk settles, enjoying an unhurried dinner near your home base.`,
-      notes: () =>
-        `Wear shoes suitable for unpaved country paths and loose gravel.`,
-      alternative: (d: string) =>
-        `Folk culture open-air museum pavilions, agrarian history hall, or covered village craft center near ${d}.`
-    },
-    {
-      title: 'Flea Markets, Antiques & Curio Collections',
-      morning: (d: string) =>
-        `Day 18 Morning: Hunt for treasures at ${d}'s weekend flea market, vintage curio stalls, or historic collectors' square.`,
-      afternoon: () =>
-        `Day 18 Afternoon: Examine vintage clocks, brassware, postcards, and memorabilia. Stop for lunch at a nostalgic retro tea salon or diner.`,
-      evening: () =>
-        `Day 18 Evening: Twilight stroll through lamp-lit old merchant quarters, followed by dinner at an established legacy restaurant.`,
-      notes: () =>
-        `Polite bargaining is customary in open vintage markets; bring reusable tote bags for fragile finds.`,
-      alternative: (d: string) =>
-        `Covered antique mall, indoor vintage arcade, or decorative arts museum in ${d}.`
-    },
-    {
-      title: 'Citadels, Forts & Royal Palaces',
-      morning: (d: string) =>
-        `Day 19 Morning: Explore the grand citadel, hilltop fortress, or historic palace grounds overlooking ${d}.`,
-      afternoon: () =>
-        `Day 19 Afternoon: Tour royal armories, historic staterooms, and manicured ornamental gardens. Enjoy lunch at an outdoor palace courtyard café.`,
-      evening: () =>
-        `Day 19 Evening: Sunset view from the fortress ramparts followed by dinner sampling grand banqueting heritage recipes.`,
-      notes: (p: string) =>
-        `Fortress visits involve stone staircases and inclines; take periodic breaks to match your ${p} pace.`,
-      alternative: (d: string) =>
-        `Fortress indoor treasury, royal armory museum, or palace portrait gallery in ${d}.`
-    },
-    {
-      title: 'Street Eats Safari & Twilight Night Markets',
-      morning: (d: string) =>
-        `Day 20 Morning: Light morning meal followed by a stroll through local bakeries and specialty confection shops in ${d}.`,
-      afternoon: () =>
-        `Day 20 Afternoon: Sample beloved mid-day street bites: warm stuffed breads, savory crepes, or fresh dumplings at popular student and worker stalls.`,
-      evening: () =>
-        `Day 20 Evening: Evening street-food crawl through vibrant night market stalls, tasting seasonal skewers, grilled specialties, and regional sweets.`,
-      notes: () =>
-        `Select busy food stalls with high customer turnover to ensure peak freshness and hot preparation.`,
-      alternative: (d: string) =>
-        `Covered evening night food bazaar or indoor street food hall in ${d}.`
-    },
-    {
-      title: 'Botanical Reserves & Shaded Green Sanctuaries',
-      morning: (d: string) =>
-        `Day 21 Morning: Peaceful morning walk through ${d}'s historic botanical garden or royal arboretum amidst rare flora and tranquil fountains.`,
-      afternoon: () =>
-        `Day 21 Afternoon: Relax under the canopy of ancient trees with a picnic or conservatory café lunch. Explore tropical greenhouses and lily ponds.`,
-      evening: () =>
-        `Day 21 Evening: Illuminated evening garden walk followed by dinner at an eco-friendly restaurant celebrating farm-to-table cuisine.`,
-      notes: () =>
-        `Inquire at the visitor booth for morning guided horticulture tours, often included with entry.`,
-      alternative: (d: string) =>
-        `Indoor tropical glasshouse conservatory or natural history botanical wing in ${d}.`
-    },
-    {
-      title: 'Textile Crafts, Weaving & Regional Fashion',
-      morning: (d: string) =>
-        `Day 22 Morning: Explore ${d}'s textile traditions—weaving, silk embroidery, or wool crafts—at a specialized costume and fabric museum.`,
-      afternoon: () =>
-        `Day 22 Afternoon: Visit artisan garment workshops, fabric bazaars, and tailor shops. Enjoy a stylish lunch at a nearby design café.`,
-      evening: () =>
-        `Day 22 Evening: Sunset aperitif in the fashion district, followed by dinner at an innovative modern bistro.`,
-      notes: () =>
-        `Check with shop owners for fabric care and dry-cleaning instructions when buying handmade weaves.`,
-      alternative: (d: string) =>
-        `Costume museum, indoor silk/textile market arcade, or covered fashion galleria in ${d}.`
-    },
-    {
-      title: 'Historic Universities & Intellectual Quarter',
-      morning: (d: string) =>
-        `Day 23 Morning: Tour the historic university campus, ancient collegiate quads, and vaulted library halls of ${d}.`,
-      afternoon: () =>
-        `Day 23 Afternoon: Browse academic bookstores, student print shops, and tranquil courtyards. Lunch at a historic college tavern or campus café.`,
-      evening: () =>
-        `Day 23 Evening: Attend a public literary reading, chamber concert, or acoustic performance, followed by dinner in the vibrant student quarter.`,
-      notes: () =>
-        `Check visitor entry hours for historic reading rooms, as some require prior online visitor passes.`,
-      alternative: (d: string) =>
-        `University natural history museum, campus art collection, or university central reading room in ${d}.`
-    },
-    {
-      title: 'Skyline Horizons & Cable Car Vistas',
-      morning: (d: string) =>
-        `Day 24 Morning: Take a scenic funicular, aerial cable car, or ridge switchback to the highest accessible viewpoint above ${d}.`,
-      afternoon: () =>
-        `Day 24 Afternoon: Breathe in crisp mountain or clifftop air while enjoying panoramic horizon views. Savor a mountaintop chalet or lookout lunch.`,
-      evening: () =>
-        `Day 24 Evening: Watch city lights begin to sparkle across the valley below as sunset fades. Descend for a warming, hearty supper.`,
-      notes: () =>
-        `Cable car operations depend on wind conditions; check operations bulletins before heading up.`,
-      alternative: (d: string) =>
-        `High-rise indoor observation deck, tower restaurant, or planetarium sky lounge in ${d}.`
-    },
-    {
-      title: 'Performing Arts & Historic Theaters',
-      morning: (d: string) =>
-        `Day 25 Morning: Daytime tour of ${d}'s majestic opera house, concert auditorium, or heritage amphitheater.`,
-      afternoon: () =>
-        `Day 25 Afternoon: Explore theatrical heritage exhibits, historic costume displays, and music museums. Enjoy a classic afternoon tea or luncheon.`,
-      evening: () =>
-        `Day 25 Evening: Experience a live theatrical performance, classical orchestra recital, or traditional dance showcase, followed by late-night supper.`,
-      notes: () =>
-        `Book tickets in advance to secure optimal seats within your allocated budget profile.`,
-      alternative: (d: string) =>
-        `Historic chamber music club, cabaret lounge, or indoor comedy theater in ${d}.`
-    },
-    {
-      title: 'Artisan Beverages & Terroir Traditions',
-      morning: (d: string) =>
-        `Day 26 Morning: Tour a historic local brewery, vineyard cellar, or artisanal tea estate located on the verdant edge of ${d}.`,
-      afternoon: () =>
-        `Day 26 Afternoon: Educational tasting session exploring fermentation, soil terroir, and traditional craft methods. Pair beverages with local artisan cheeses during lunch.`,
-      evening: () =>
-        `Day 26 Evening: Cozy evening in a historic cellar tavern or heritage pub, enjoying hearty regional comfort platters.`,
-      notes: () =>
-        `Opt for public transit or authorized taxi services when touring peripheral beverage cellars and estates.`,
-      alternative: (d: string) =>
-        `Downtown tasting salon, craft beverage museum, or covered tea lounge in ${d}.`
-    },
-    {
-      title: 'Ancient Ruins & Archaeology Expeditions',
-      morning: (d: string) =>
-        `Day 27 Morning: Explore ancient stone foundations, Roman baths, or sacred temple ruins recounting the earliest civilization of ${d}.`,
-      afternoon: () =>
-        `Day 27 Afternoon: Visit the adjacent archaeological museum displaying unearthed coins, mosaics, and classical pottery. Enjoy a casual lunch nearby.`,
-      evening: () =>
-        `Day 27 Evening: Atmospheric sunset stroll past ancient spotlighted stone monuments, followed by dinner at a rustic regional kitchen.`,
-      notes: () =>
-        `Wear non-slip, closed-toe footwear as ancient stone pathways and steps can be smooth and uneven.`,
-      alternative: (d: string) =>
-        `Archaeological indoor museum, coin treasury, or antiquities research pavilion in ${d}.`
-    },
-    {
-      title: 'Curated Keepsakes & Fair-Trade Souvenir Hunt',
-      morning: (d: string) =>
-        `Day 28 Morning: Visit certified artisan cooperatives and fair-trade craft boutiques across ${d} to select authentic handmade keepsakes.`,
-      afternoon: () =>
-        `Day 28 Afternoon: Shop for packable gourmet regional specialties: vacuum-packed spices, artisanal preserves, teas, and sweets. Enjoy a pleasant café lunch.`,
-      evening: (d: string) =>
-        `Day 28 Evening: Celebratory evening dinner at one of ${d}'s most beloved restaurants, commemorating wonderful trip discoveries.`,
-      notes: () =>
-        `Keep receipts and customs seals intact for food items and high-value crafts for travel compliance.`,
-      alternative: (d: string) =>
-        `Covered central craft mall, historic department store, or indoor artisan pavilion in ${d}.`
-    },
-    {
-      title: 'Favorite Places Revisited & Personal Highlights',
-      morning: (d: string) =>
-        `Day 29 Morning: Return to your absolute favorite café or park in ${d} for an unhurried morning reminiscing about the best moments of your journey.`,
-      afternoon: () =>
-        `Day 29 Afternoon: Revisit favorite viewpoints or pick up last-minute items you regretted leaving behind. Enjoy an indulgent farewell lunch.`,
-      evening: () =>
-        `Day 29 Evening: Sunset farewell walk along your favorite boulevard, riverbank, or scenic ridge. Toast to a memorable journey during a festive dinner.`,
-      notes: () =>
-        `Check online flight or train departure times and arrange airport/station transfers in advance.`,
-      alternative: (d: string) =>
-        `Cozy favorite indoor tearoom, museum café, or sheltered hotel lounge in ${d}.`
-    },
-    {
-      title: 'Farewell Stroll & Departure Preparations',
-      morning: (d: string) =>
-        `Day 30 Morning: Peaceful final morning walk around your neighborhood in ${d}. Savor one last traditional breakfast and locally roasted coffee.`,
-      afternoon: (_d: string, _int: string, s: string) =>
-        `Day 30 Afternoon: Pack bags, complete check-out from your ${s} stay, and take in a final scenic vista of the city.`,
-      evening: (d: string) =>
-        `Day 30 Evening: Transfer to the departure terminal carrying unforgettable memories, cultural insights, and regional treasures from ${d}.`,
-      notes: () =>
-        `Allow generous transit buffer times during peak commute hours to reach the airport or railway station comfortably.`,
-      alternative: (d: string) =>
-        `Departure terminal executive lounge, station transit hotel lobby, or adjacent sheltered mall in ${d}.`
-    }
-  ];
-
-  const itinerary: TravelPlan['itinerary'] = [];
-  for (let i = 1; i <= days; i++) {
-    const themeIndex = (i - 1) % DAILY_THEMES.length;
-    const theme = DAILY_THEMES[themeIndex];
-    const currentInterest = rawInterests[(i - 1) % rawInterests.length];
-
-    itinerary.push({
-      day: i,
-      morning: theme.morning(dest, currentInterest, stay),
-      afternoon: theme.afternoon(dest, currentInterest, stay, pace),
-      evening: theme.evening(dest, currentInterest, stay),
-      notes: theme.notes(pace),
-      alternative: theme.alternative(dest)
-    });
-  }
-
-  const placesToVisit: PlaceToVisit[] = [
-    {
-      name: `Iconic Landmark of ${dest}`,
-      reason: `Must-visit signature highlight offering the best cultural insights and views.`,
-      bestTime: 'Early morning (08:30 AM) to avoid crowds'
-    },
-    {
-      name: `Old Town Heritage Quarter`,
-      reason: `Charming streets, architecture, and photo opportunities.`,
-      bestTime: 'Late afternoon before sunset'
-    },
-    {
-      name: `Scenic Nature Viewpoint / Coastline`,
-      reason: `Offers breathtaking panoramic views and fresh ambiance.`,
-      bestTime: 'Golden hour (05:30 PM)'
-    }
-  ];
-
-  if (days >= 7) {
-    placesToVisit.push(
-      {
-        name: `Artisan Craft & Historic Market District`,
-        reason: `Immersion into traditional regional craftsmanship, textiles, and local commerce.`,
-        bestTime: 'Mid-morning (10:30 AM)'
-      },
-      {
-        name: `Regional Botanical Gardens / Nature Sanctuary`,
-        reason: `Tranquil green sanctuary offering relaxing trails and diverse flora.`,
-        bestTime: 'Late afternoon (04:00 PM)'
-      }
-    );
-  }
-
-  const foodAndLocalExperiences: FoodOrExperience[] = [
-    {
-      name: `Authentic Local Specialties of ${dest}`,
-      reason: `Sample the renowned delicacies and street food stalls loved by locals.`
-    },
-    {
-      name: `Traditional Tea / Spice Tasting or Night Market`,
-      reason: `Immerse yourself in authentic regional aromas and culinary heritage.`
-    }
-  ];
-
-  if (days >= 7) {
-    foodAndLocalExperiences.push({
-      name: `Regional Family-Style Heritage Feast`,
-      reason: `Savor time-honored recipes passed down through generations in a classic neighborhood eatery.`
-    });
-  }
-
-  const activities: Activity[] = [
-    {
-      name: `Guided Heritage Walk & Photography Tour`,
-      reason: `Ideal for ${interestStr} matching your ${pace} activity style.`
-    },
-    {
-      name: `Local Artisan Craft & Souvenir Discovery`,
-      reason: `Support local craftsmen and pick up authentic regional keepsakes.`
-    }
-  ];
-
-  if (days >= 7) {
-    activities.push({
-      name: `Scenic Day Excursion to Surrounding Hamlets`,
-      reason: `Experience countryside landscapes and historic rural traditions beyond the city center.`
-    });
-  }
-
-  return {
-    accommodationGuidance: `For a ${stay} stay in ${dest} with ${travellers} traveller(s) and a budget of ${totalBudgetFmt}, consider staying centrally in the downtown or cultural district. This offers easy walking access to top attractions and great transit links.`,
-    placesToVisit,
-    foodAndLocalExperiences,
-    activities,
-    weatherAdvice: `Check current seasonal forecasts for ${dest}. Pack breathable layers, sun protection, and an umbrella or light jacket for changing conditions.`,
-    budgetTips: [
-      `For a ${days}-day trip with ${travellers} traveller(s), plan for an average daily spend of approx ${dailyBudgetFmt} across accommodation, meals, and local transit (~₹${Math.round(totalBudget / (days * travellers)).toLocaleString('en-IN')} per person/day).`,
-      `Allocate approx ₹${Math.round(totalBudget * 0.4).toLocaleString('en-IN')} for accommodation and ₹${Math.round(totalBudget * 0.35).toLocaleString('en-IN')} for dining and sightseeing.`,
-      `Use authorized local cabs or public transit instead of private booking brokers to save up to 40%.`,
-      `Eat where locals eat for authentic flavors at a fraction of tourist restaurant prices.`
-    ],
-    itinerary,
-    generatedAt: new Date().toISOString()
-  };
 }
 
 /**
@@ -1134,22 +657,17 @@ export async function generateTravelPlanService(
       });
     } catch (destErr: any) {
       if (destErr instanceof DestinationAmbiguityError) {
-        throw new Error(destErr.message);
+        throw destErr;
       }
       if (destErr instanceof OsmNoResultsError) {
         throw new Error(
           `Unable to locate destination "${request.destination}". Please verify the spelling or specify the district/state.`
         );
       }
-      console.warn(`[DestinationResolver Diagnostics] Failed to resolve "${request.destination}": ${destErr.message}`);
-      resolvedDest = {
-        originalInput: request.destination,
-        canonicalName: request.destination,
-        formattedAddress: request.destination,
-        latitude: 0,
-        longitude: 0,
-        addressComponents: []
-      };
+      // Never fall back silently to (0, 0)
+      throw new Error(
+        `Failed to resolve destination "${request.destination}" on OpenStreetMap: ${destErr.message || 'Geocoding service unavailable'}.`
+      );
     }
   }
 
@@ -1157,7 +675,7 @@ export async function generateTravelPlanService(
   let catalog: VerifiedPlaceCatalog;
   if (options.catalogOverride) {
     catalog = options.catalogOverride;
-  } else if (resolvedDest.latitude !== 0 || resolvedDest.longitude !== 0) {
+  } else {
     try {
       catalog = await buildVerifiedPlaceCatalog(resolvedDest, {
         fetchFn: options.fetchFn
@@ -1171,13 +689,6 @@ export async function generateTravelPlanService(
         metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0, dataSource: 'OpenStreetMap (ODbL)' }
       };
     }
-  } else {
-    catalog = {
-      destination: resolvedDest,
-      places: [],
-      byCategory: { accommodation: [], attraction: [], restaurant: [], activity: [], poi: [] },
-      metadata: { generatedAt: new Date().toISOString(), searchRadiiMeters: [], totalVerifiedPlaces: 0, dataSource: 'OpenStreetMap (ODbL)' }
-    };
   }
 
   console.log(
@@ -1189,6 +700,11 @@ export async function generateTravelPlanService(
 
   // 3. Format verified catalog for prompt
   const formattedCatalog = formatCatalogForPrompt(catalog);
+  const shouldIncludeItinerary = request.includeDayByDayItinerary !== false;
+
+  const itineraryPromptInstruction = shouldIncludeItinerary
+    ? `CRITICAL DURATION REQUIREMENT: You MUST include full day-by-day plans for all ${request.numberOfDays} days (day 1 to day ${request.numberOfDays}) in the "itinerary" array.`
+    : `CRITICAL ITINERARY REQUIREMENT: The user has chosen NOT to generate a day-by-day itinerary schedule. You MUST set the "itinerary" array to an empty array: "itinerary": []. Do NOT output any daily schedules.`;
 
   const userPrompt = `
 Create a detailed, personalized destination travel plan for the destination parameters provided below using ONLY the verified real-world places from the catalog.
@@ -1198,7 +714,7 @@ Create a detailed, personalized destination travel plan for the destination para
 - Number of Days: ${request.numberOfDays}
 - Total Budget in INR: ₹${request.budgetInr}
 - Number of Travellers: ${request.numberOfTravellers}
-- Interests: ${request.interests.join(', ') || 'General sightseeing'}
+- Interests: ${Array.isArray(request.interests) && request.interests.length > 0 ? request.interests.join(', ') : 'General sightseeing'}
 - Accommodation Preference: ${request.accommodationPreference}
 - Activity Level: ${request.activityLevel}
 ${request.additionalNotes ? `- Additional Notes / Preferences: ${request.additionalNotes}` : ''}
@@ -1208,11 +724,7 @@ ${request.additionalNotes ? `- Additional Notes / Preferences: ${request.additio
 ${formattedCatalog}
 </verified_places_catalog>
 
-${
-  request.includeDayByDayItinerary === false
-    ? `CRITICAL ITINERARY REQUIREMENT: The user has chosen NOT to generate a day-by-day itinerary schedule. You MUST set the "itinerary" array to an empty array: "itinerary": []. Do NOT output any daily schedules.`
-    : `CRITICAL DURATION REQUIREMENT: You MUST include full day-by-day plans for all ${request.numberOfDays} days (day 1 to day ${request.numberOfDays}) in the "itinerary" array.`
-}
+${itineraryPromptInstruction}
 
 CRITICAL GROUNDING REQUIREMENT:
 - You must select places EXCLUSIVELY from <verified_places_catalog>.
@@ -1222,34 +734,20 @@ CRITICAL GROUNDING REQUIREMENT:
 - If only 1 or 2 attractions exist, do NOT invent additional attractions. Fewer real verified places is always preferred over fabricated entities.
 
 You must return ONLY a valid JSON object strictly matching this format:
-${GROUNDED_JSON_SCHEMA_EXAMPLE}
+${shouldIncludeItinerary ? GROUNDED_JSON_SCHEMA_EXAMPLE : GROUNDED_JSON_SCHEMA_EXAMPLE.replace(/"itinerary": \[[^\]]*\]/s, '"itinerary": []')}
 `;
-
-  const shouldIncludeItinerary = request.includeDayByDayItinerary !== false;
 
   try {
     const rawAiResponse = await callGemini(GROUNDED_SYSTEM_PROMPT, userPrompt, options.fetchFn);
-    const parsedPlan = cleanAndParseJSON(rawAiResponse);
-
-    if (!shouldIncludeItinerary) {
-      parsedPlan.itinerary = [];
-      parsedPlan.includeDayByDayItinerary = false;
-    } else {
-      parsedPlan.includeDayByDayItinerary = true;
-      // If AI returned fewer days than requested, complete the missing days with grounded themes
-      if (parsedPlan.itinerary.length < request.numberOfDays) {
-        const groundedFallback = generateCatalogGroundedFallback(request, catalog);
-        for (let i = parsedPlan.itinerary.length; i < request.numberOfDays; i++) {
-          if (groundedFallback.itinerary[i]) {
-            parsedPlan.itinerary.push({ ...groundedFallback.itinerary[i] });
-          }
-        }
-      }
-    }
+    const parsedPlan = cleanAndParseJSON(rawAiResponse, {
+      requireItinerary: shouldIncludeItinerary,
+      expectedDays: request.numberOfDays
+    });
 
     parsedPlan.generatedAt = new Date().toISOString();
     parsedPlan.resolvedDestination = catalog.destination;
     parsedPlan.verifiedPlacesCatalog = catalog.places;
+    parsedPlan.includeDayByDayItinerary = shouldIncludeItinerary;
 
     // Authoritative Post-Generation Validation Boundary
     const { plan: validatedPlan, validationReport } = validateAndSanitizeTravelPlan(parsedPlan, catalog);
@@ -1267,39 +765,35 @@ ${GROUNDED_JSON_SCHEMA_EXAMPLE}
     };
   } catch (error: any) {
     const safeErrorMsg = redactApiKey(error?.message || 'Unknown error');
-    console.warn('[Gemini Service] Fallback activated. Reason:', safeErrorMsg);
+    console.error('[Gemini Service Failure]:', safeErrorMsg);
 
-    const fallbackPlan = generateCatalogGroundedFallback(request, catalog);
-    fallbackPlan.includeDayByDayItinerary = shouldIncludeItinerary;
-    if (!fallbackPlan.generatedAt) {
-      fallbackPlan.generatedAt = new Date().toISOString();
-    }
-    fallbackPlan.resolvedDestination = catalog.destination;
-    fallbackPlan.verifiedPlacesCatalog = catalog.places;
-
-    // Run fallback plan through the exact same validator boundary
-    const { plan: validatedFallbackPlan, validationReport: fallbackReport } = validateAndSanitizeTravelPlan(fallbackPlan, catalog);
-    console.log('[TravelPlan Validator (Fallback)] Report:', JSON.stringify(fallbackReport));
-
-    // Determine clear user-facing explanation without exposing technical details
-    let userMessage = 'Generated with verified destination recommendations.';
+    // Provide clear, safe, user-facing error message without technical leakages
+    let userMessage = 'AI travel plan generation was temporarily unavailable.';
     const errMsgLower = safeErrorMsg.toLowerCase();
 
-    if (errMsgLower.includes('missing_key')) {
-      userMessage = 'Generated in demo mode with verified places. Provide GEMINI_API_KEY in server/.env for live AI generation.';
-    } else if (errMsgLower.includes('429') || errMsgLower.includes('rate limit') || errMsgLower.includes('quota') || errMsgLower.includes('503')) {
-      userMessage = 'AI service is experiencing high traffic. A curated travel plan using verified places has been generated for you.';
+    if (errMsgLower.includes('missing_key') || errMsgLower.includes('gemini_api_key')) {
+      userMessage = 'GEMINI_API_KEY is not configured in server/.env. Please provide a valid Gemini API key.';
+    } else if (errMsgLower.includes('ambiguous')) {
+      userMessage = safeErrorMsg;
+    } else if (errMsgLower.includes('unable to locate destination')) {
+      userMessage = safeErrorMsg;
+    } else if (errMsgLower.includes('429') || errMsgLower.includes('rate limit') || errMsgLower.includes('quota')) {
+      userMessage = 'Gemini AI service quota exceeded or rate limited. Please try again in a few moments.';
+    } else if (errMsgLower.includes('503') || errMsgLower.includes('overloaded')) {
+      userMessage = 'Gemini AI service is currently overloaded. Please try again shortly.';
     } else if (errMsgLower.includes('timeout') || errMsgLower.includes('abort')) {
-      userMessage = 'AI generation timed out. A curated travel plan using verified places has been generated for you.';
+      userMessage = 'Gemini AI request timed out. Please try again.';
     } else if (errMsgLower.includes('empty response')) {
-      userMessage = 'AI service returned an empty response. A curated travel plan using verified places has been generated for you.';
-    } else if (errMsgLower.includes('invalid json') || errMsgLower.includes('itinerary schedule')) {
-      userMessage = 'AI service returned an unreadable response format. A curated travel plan using verified places has been generated for you.';
+      userMessage = 'Gemini AI returned an empty response. Please try again.';
+    } else if (errMsgLower.includes('invalid json') || errMsgLower.includes('failed to parse')) {
+      userMessage = 'Gemini AI returned an unreadable response format. Please try again.';
+    } else if (errMsgLower.includes('itinerary schedule') || errMsgLower.includes('day(s) of itinerary')) {
+      userMessage = `Gemini AI returned an incomplete itinerary schedule. Please try again.`;
     } else {
-      userMessage = 'AI service was temporarily unavailable. A curated travel plan using verified places has been generated for you.';
+      userMessage = `AI plan generation failed: ${safeErrorMsg}`;
     }
 
-    return { plan: validatedFallbackPlan, isDemo: true, message: userMessage };
+    throw new Error(userMessage);
   }
 }
 
@@ -1321,8 +815,12 @@ export function validateAndMergeModifiedPlan(
   const validatedItinerary: DayPlan[] = [];
 
   if (shouldIncludeItinerary) {
-    // Must contain an itinerary array with at least one day when itinerary was expected
+    // Must contain an itinerary array with expected days when itinerary was expected
     if (!Array.isArray(parsed.itinerary) || parsed.itinerary.length === 0) {
+      return null;
+    }
+
+    if (expectedDays && parsed.itinerary.length !== expectedDays) {
       return null;
     }
 
@@ -1339,7 +837,7 @@ export function validateAndMergeModifiedPlan(
         day: dayNumber,
         morning:
           typeof item.morning === 'string' && item.morning.trim() !== ''
-            ? item.morning
+            ? item.morning.trim()
             : fallbackDay?.morning || 'Morning exploration and sightseeing',
         morningPlaceId:
           typeof item.morningPlaceId === 'string' && item.morningPlaceId.trim()
@@ -1347,7 +845,7 @@ export function validateAndMergeModifiedPlan(
             : fallbackDay?.morningPlaceId,
         afternoon:
           typeof item.afternoon === 'string' && item.afternoon.trim() !== ''
-            ? item.afternoon
+            ? item.afternoon.trim()
             : fallbackDay?.afternoon || 'Afternoon discovery and local dining',
         afternoonPlaceId:
           typeof item.afternoonPlaceId === 'string' && item.afternoonPlaceId.trim()
@@ -1355,7 +853,7 @@ export function validateAndMergeModifiedPlan(
             : fallbackDay?.afternoonPlaceId,
         evening:
           typeof item.evening === 'string' && item.evening.trim() !== ''
-            ? item.evening
+            ? item.evening.trim()
             : fallbackDay?.evening || 'Evening cultural activity and dinner',
         eveningPlaceId:
           typeof item.eveningPlaceId === 'string' && item.eveningPlaceId.trim()
@@ -1365,13 +863,6 @@ export function validateAndMergeModifiedPlan(
         alternative:
           typeof item.alternative === 'string' ? item.alternative : fallbackDay?.alternative || ''
       });
-    }
-
-    // Preserve any missing days if model accidentally returned fewer days than the original plan
-    if (validatedItinerary.length < expectedDays && originalPlan.itinerary.length >= expectedDays) {
-      for (let i = validatedItinerary.length; i < expectedDays; i++) {
-        validatedItinerary.push({ ...originalPlan.itinerary[i] });
-      }
     }
   }
 
@@ -1523,7 +1014,7 @@ ORIGINAL TRIP DETAILS:
 - Number of Days: ${request.originalDetails.numberOfDays}
 - Total Budget in INR: ₹${request.originalDetails.budgetInr}
 - Number of Travellers: ${request.originalDetails.numberOfTravellers}
-- Interests: ${request.originalDetails.interests.join(', ') || 'General sightseeing'}
+- Interests: ${Array.isArray(request.originalDetails.interests) && request.originalDetails.interests.length > 0 ? request.originalDetails.interests.join(', ') : 'General sightseeing'}
 - Accommodation Preference: ${request.originalDetails.accommodationPreference}
 - Activity Level: ${request.originalDetails.activityLevel}
 ${request.originalDetails.additionalNotes ? `- Additional Notes: ${request.originalDetails.additionalNotes}` : ''}
@@ -1545,7 +1036,10 @@ ${GROUNDED_JSON_SCHEMA_EXAMPLE}
 
   try {
     const rawAiResponse = await callGemini(GROUNDED_SYSTEM_PROMPT, userPrompt, options.fetchFn);
-    const parsedPlan = cleanAndParseJSON(rawAiResponse);
+    const parsedPlan = cleanAndParseJSON(rawAiResponse, {
+      requireItinerary: hadItinerary,
+      expectedDays: request.originalDetails.numberOfDays
+    });
     const validatedPlan = validateAndMergeModifiedPlan(
       parsedPlan,
       originalPlanCopy,
@@ -1559,6 +1053,7 @@ ${GROUNDED_JSON_SCHEMA_EXAMPLE}
     validatedPlan.generatedAt = new Date().toISOString();
     validatedPlan.resolvedDestination = catalog.destination;
     validatedPlan.verifiedPlacesCatalog = catalog.places;
+    validatedPlan.includeDayByDayItinerary = hadItinerary;
 
     // Authoritative Post-Generation Validation Boundary for modification
     const { plan: sanitizedModifiedPlan, validationReport: modReport } = validateAndSanitizeTravelPlan(validatedPlan, catalog);
@@ -1571,27 +1066,29 @@ ${GROUNDED_JSON_SCHEMA_EXAMPLE}
     };
   } catch (error: any) {
     const safeErrorMsg = redactApiKey(error?.message || 'Unknown error');
-    console.warn('[Gemini Service] Live modification notice:', safeErrorMsg);
+    console.error('[Gemini Service Modify Failure]:', safeErrorMsg);
 
-    let reasonPrefix = 'Live AI modification was unavailable.';
+    let userMessage = 'AI travel plan modification was temporarily unavailable.';
     const errMsgLower = safeErrorMsg.toLowerCase();
 
-    if (errMsgLower.includes('missing_key')) {
-      reasonPrefix = 'Live AI modification requires GEMINI_API_KEY to be configured in server/.env.';
-    } else if (errMsgLower.includes('429') || errMsgLower.includes('rate limit') || errMsgLower.includes('quota') || errMsgLower.includes('503')) {
-      reasonPrefix = 'AI service is currently experiencing high traffic.';
+    if (errMsgLower.includes('missing_key') || errMsgLower.includes('gemini_api_key')) {
+      userMessage = 'GEMINI_API_KEY is not configured in server/.env. Please provide a valid Gemini API key.';
+    } else if (errMsgLower.includes('429') || errMsgLower.includes('rate limit') || errMsgLower.includes('quota')) {
+      userMessage = 'Gemini AI service quota exceeded or rate limited. Please try again in a few moments.';
+    } else if (errMsgLower.includes('503') || errMsgLower.includes('overloaded')) {
+      userMessage = 'Gemini AI service is currently overloaded. Please try again shortly.';
     } else if (errMsgLower.includes('timeout') || errMsgLower.includes('abort')) {
-      reasonPrefix = 'AI modification request timed out.';
+      userMessage = 'Gemini AI modification request timed out. Please try again.';
     } else if (errMsgLower.includes('empty response')) {
-      reasonPrefix = 'AI service returned an empty response.';
-    } else if (errMsgLower.includes('incomplete') || errMsgLower.includes('invalid json') || errMsgLower.includes('itinerary schedule')) {
-      reasonPrefix = 'AI service returned an unreadable plan structure.';
+      userMessage = 'Gemini AI returned an empty response. Please try again.';
+    } else if (errMsgLower.includes('invalid json') || errMsgLower.includes('failed to parse')) {
+      userMessage = 'Gemini AI returned an unreadable response format. Please try again.';
+    } else if (errMsgLower.includes('incomplete') || errMsgLower.includes('itinerary schedule') || errMsgLower.includes('day(s) of itinerary')) {
+      userMessage = 'Gemini AI returned an incomplete plan structure during modification. Please try again.';
+    } else {
+      userMessage = `AI modification failed: ${safeErrorMsg}`;
     }
 
-    return {
-      plan: originalPlanCopy,
-      isDemo: true,
-      message: `${reasonPrefix} Your existing travel plan has been preserved intact without changes.`
-    };
+    throw new Error(userMessage);
   }
 }

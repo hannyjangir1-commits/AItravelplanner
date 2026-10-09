@@ -350,8 +350,19 @@ export async function buildVerifiedPlaceCatalog(
         rawPlaces = placesAtTier;
       }
 
-      // If we found sufficient places at this tier, stop to avoid unnecessary wide queries
-      if (rawPlaces.length >= 8 || boundedRadius >= maxRadius) {
+      // Check category coverage at current tier
+      const accomCount = placesAtTier.filter(p => p.categoryHint === 'accommodation').length;
+      const attrCount = placesAtTier.filter(p => p.categoryHint === 'attraction').length;
+      const minAccom = options.minAccommodation ?? 1;
+      const minAttr = options.minAttractions ?? 2;
+
+      // Stop expanding if sufficient attractions and accommodations exist,
+      // or if we have a robust catalog with representation across both categories,
+      // or if we reached the maximum search radius.
+      const hasCoverage = (attrCount >= minAttr && accomCount >= minAccom) ||
+                          (placesAtTier.length >= 15 && attrCount >= 1 && accomCount >= 1);
+
+      if (hasCoverage || boundedRadius >= maxRadius) {
         break;
       }
     } catch (err: any) {

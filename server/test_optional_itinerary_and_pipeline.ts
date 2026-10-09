@@ -443,7 +443,7 @@ async function runSuite() {
     assert.ok(ATTRACTION_PLACE_TYPES.includes('mosque'), 'mosque is valid Table A');
   });
 
-  await test('6.2 generateTravelPlanService reports honest message when places are verified vs unverified', async () => {
+  await test('6.2 generateTravelPlanService rejects when AI service fails and does NOT return template fallback', async () => {
     const req: GeneratePlanRequest = {
       destination: 'Mumbai',
       numberOfDays: 2,
@@ -455,16 +455,19 @@ async function runSuite() {
       includeDayByDayItinerary: false
     };
 
-    // Simulated service execution with mock catalog override
-    const result = await generateTravelPlanService(req, {
-      catalogOverride: MOCK_CATALOG,
-      fetchFn: async () => new Response('{}', { status: 500 }) // Triggers grounded fallback
-    });
-
-    assert.equal(result.plan.includeDayByDayItinerary, false);
-    assert.equal(result.plan.itinerary.length, 0);
-    assert.ok(result.plan.placesToVisit.length > 0);
-    assert.ok(result.message?.includes('verified') || result.message?.includes('curated'));
+    // Simulated service execution with mock catalog override where Gemini returns 500
+    await assert.rejects(
+      async () => {
+        await generateTravelPlanService(req, {
+          catalogOverride: MOCK_CATALOG,
+          fetchFn: async () => new Response('{}', { status: 500 })
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof Error);
+        return true;
+      }
+    );
   });
 
   console.log('\n================================================================');

@@ -441,7 +441,7 @@ async function runAllTests() {
     assert.equal(plan.verifiedPlacesCatalog?.length, 3);
   });
 
-  await runTest('13. Gemini failure falls back to grounded catalog plan (NOT fake templates)', async () => {
+  await runTest('13. Gemini failure returns safe API error and does NOT return fallback template', async () => {
     // Mock Gemini throwing HTTP 500 error
     const mockFetch: typeof fetch = async (url) => {
       const urlStr = String(url);
@@ -453,17 +453,19 @@ async function runAllTests() {
 
     process.env.GEMINI_API_KEY = 'test_mock_gemini_key';
 
-    const result = await generateTravelPlanService(sampleRequest, {
-      catalogOverride: mockRuralCatalog,
-      fetchFn: mockFetch
-    });
-
-    assert.equal(result.isDemo, true);
-    // Grounded fallback must be used, NOT the old template with fake places
-    assert.equal(result.plan.placesToVisit.length, 1);
-    assert.equal(result.plan.placesToVisit[0].name, 'Shri Ram Mandir Chandekasare');
-    assert.ok(!result.plan.placesToVisit[0].name.includes('Iconic Landmark of'));
-    assert.ok(!result.plan.placesToVisit.some((p) => p.name.includes('Old Town Heritage Quarter')));
+    await assert.rejects(
+      async () => {
+        await generateTravelPlanService(sampleRequest, {
+          catalogOverride: mockRuralCatalog,
+          fetchFn: mockFetch
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof Error);
+        assert.ok(err.message.includes('AI plan generation failed') || err.message.includes('Gemini AI'));
+        return true;
+      }
+    );
   });
 
   console.log(`\n============================================================`);

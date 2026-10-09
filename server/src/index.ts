@@ -3,9 +3,13 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dns from 'dns';
 import rateLimit from 'express-rate-limit';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
+
+// Resolve IPv4 first to prevent connection timeouts on Windows environments without public IPv6 routing
+dns.setDefaultResultOrder('ipv4first');
 import { generateTravelPlanService, modifyTravelPlanService } from './aiService.js';
 import { validateGeneratePlanRequest, validateModifyPlanRequest, isValidUuid } from './validation.js';
 import { testDbConnection } from './db.js';
@@ -113,15 +117,15 @@ app.use(cors({
 // Cookie parsing middleware for authenticated sessions
 app.use(cookieParser());
 
-// Security: Enforce explicit 100kb body size limit to prevent memory exhaustion attacks
-app.use(express.json({ limit: '100kb' }));
+// Security: Enforce explicit 1mb body size limit to accommodate travel plans with verified place catalogs
+app.use(express.json({ limit: '1mb' }));
 
 // Handle malformed JSON and payload size errors safely before hitting route handlers
 app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
   if (err.type === 'entity.too.large') {
     res.status(413).json({
       success: false,
-      error: 'Request payload exceeds the 100KB limit.'
+      error: 'Request payload exceeds the 1MB limit.'
     });
     return;
   }
@@ -220,7 +224,7 @@ app.post('/api/generate-travel-plan', requireAuth, aiRateLimiter, async (req: Re
     console.error('[Generate Plan Route Error]:', error?.message || error);
     res.status(500).json({
       success: false,
-      error: 'Failed to generate travel plan. Please try again later.'
+      error: error?.message || 'Failed to generate travel plan. Please try again later.'
     });
   }
 });
@@ -242,16 +246,14 @@ app.post('/api/modify-travel-plan', requireAuth, aiRateLimiter, async (req: Requ
       success: true,
       data: result.plan,
       isDemo: result.isDemo,
-      message: result.message || (result.isDemo
-        ? 'Live AI modification was unavailable. Your existing travel plan has been preserved intact.'
-        : 'Plan updated successfully.')
+      message: result.message || 'Plan updated successfully.'
     });
   } catch (error: any) {
     // Log technical error details internally for developers without exposing to clients
     console.error('[Modify Plan Route Error]:', error?.message || error);
     res.status(500).json({
       success: false,
-      error: 'Failed to modify travel plan. Please try again later.'
+      error: error?.message || 'Failed to modify travel plan. Please try again later.'
     });
   }
 });
