@@ -1383,6 +1383,32 @@ textarea:focus-visible,
   align-items: center;
 }
 
+.entry-badge-verified {
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--color-emerald-light);
+  color: var(--color-emerald-dark);
+  border: 1px solid #a7f3d0;
+  padding: 0.18rem 0.55rem;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.entry-badge-unverified {
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: var(--bg-surface-subtle);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  padding: 0.18rem 0.55rem;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
 .entry-desc {
   font-size: 0.86rem;
   color: var(--text-body);

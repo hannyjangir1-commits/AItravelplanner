@@ -71,6 +71,9 @@ export async function saveTravelPlan(
   };
 
   if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
     const id = randomUUID();
     const now = new Date().toISOString();
     memPlans.set(id, {
@@ -147,6 +150,9 @@ export async function getTravelPlansByUserId(userId: string): Promise<CompactIti
   }
 
   if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
     return Array.from(memPlans.values())
       .filter((p) => p.userId === userId.trim())
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -229,6 +235,9 @@ export async function getTravelPlanByIdForUser(
   }
 
   if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
     const p = memPlans.get(id.trim());
     if (!p || p.userId !== userId.trim()) {
       return null;

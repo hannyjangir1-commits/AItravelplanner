@@ -546,7 +546,7 @@ async function runPhase8Suite() {
   });
 
   // 10. Catalog contains no verified places
-  await runTest('10. Catalog contains no verified places (Validator strips hallucinations, honest guidance)', () => {
+  await runTest('10. Catalog contains no verified places (Validator retains suggestion as unverified, strips fake ID)', () => {
     const emptyCatalog: VerifiedPlaceCatalog = {
       destination: MOCK_MUMBAI_DEST,
       places: [],
@@ -566,12 +566,16 @@ async function runPhase8Suite() {
     };
 
     const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(hallucinatedPlan, emptyCatalog);
-    assert.equal(sanitized.placesToVisit.length, 0);
-    assert.equal(validationReport.removedPlaceReferences, 1);
+    assert.equal(sanitized.placesToVisit.length, 1);
+    assert.equal(sanitized.placesToVisit[0].name, 'Imaginary Castle');
+    assert.equal(sanitized.placesToVisit[0].verifiedPlaceId, null);
+    assert.equal(sanitized.placesToVisit[0].verificationStatus, 'unverified');
+    assert.equal(sanitized.placesToVisit[0].source, 'ai_suggestion');
+    assert.equal(validationReport.unverifiedPlaceReferences, 1);
   });
 
   // 11. Catalog contains attractions but no accommodations
-  await runTest('11. Catalog contains attractions but no accommodations (Rural honesty maintained)', () => {
+  await runTest('11. Catalog contains attractions but no accommodations (Rural honesty maintained, prices sanitized)', () => {
     const ruralCatalog: VerifiedPlaceCatalog = {
       destination: {
         originalInput: 'RuralVillage',
@@ -634,8 +638,9 @@ async function runPhase8Suite() {
     const { plan: sanitized } = validateAndSanitizeTravelPlan(planWithHallucinatedHotel, ruralCatalog);
     assert.equal(sanitized.placesToVisit.length, 1);
     assert.equal(sanitized.placesToVisit[0].name, 'Village Ancient Temple');
-    // Hallucinated hotel pricing and name stripped
-    assert.ok(!sanitized.accommodationGuidance.includes('Luxury Resort Village'));
+    // Hallucinated hotel room pricing is sanitized
+    assert.ok(!sanitized.accommodationGuidance.includes('₹10,000/night'));
+    assert.ok(sanitized.accommodationGuidance.includes('(current accommodation pricing is unavailable)'));
   });
 
   // 12. Itinerary checkbox is enabled

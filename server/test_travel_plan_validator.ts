@@ -303,7 +303,7 @@ async function main() {
     assert.ok(validationReport.validPlaceReferences >= 1);
   });
 
-  await runTest('2. Unknown verifiedPlaceId is removed', () => {
+  await runTest('2. Unknown verifiedPlaceId is normalized to unverified AI suggestion', () => {
     const plan = createBaseTravelPlan();
     plan.placesToVisit.push({
       verifiedPlaceId: 'VP_FAKE_99',
@@ -312,11 +312,16 @@ async function main() {
       bestTime: 'Morning'
     });
 
-    const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
+    const { plan: sanitized } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
 
-    assert.equal(sanitized.placesToVisit.length, 1); // Only VP_01 remains
+    // Both places remain: VP_01 as verified, second as unverified AI suggestion
+    assert.equal(sanitized.placesToVisit.length, 2);
+    assert.equal(sanitized.placesToVisit[0].verifiedPlaceId, 'VP_01');
+    assert.equal(sanitized.placesToVisit[0].verificationStatus, 'verified');
+    assert.equal(sanitized.placesToVisit[1].verifiedPlaceId, null);
+    assert.equal(sanitized.placesToVisit[1].verificationStatus, 'unverified');
+    assert.equal(sanitized.placesToVisit[1].source, 'ai_suggestion');
     assert.ok(!sanitized.placesToVisit.some(p => p.verifiedPlaceId === 'VP_FAKE_99'));
-    assert.ok(validationReport.removedPlaceReferences >= 1);
   });
 
   await runTest('3. Gemini name is replaced by authoritative catalog name', () => {
@@ -346,26 +351,28 @@ async function main() {
     assert.equal(sanitized.itinerary[0].eveningPlaceId, 'VP_03');
   });
 
-  await runTest('5. Invalid itinerary place ID is removed', () => {
+  await runTest('5. Invalid itinerary place ID is removed while schedule text is kept', () => {
     const plan = createBaseTravelPlan();
     plan.itinerary[0].morningPlaceId = 'VP_INVALID_999';
 
-    const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
+    const { plan: sanitized } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
 
     assert.equal(sanitized.itinerary[0].morningPlaceId, undefined);
-    assert.ok(validationReport.removedPlaceReferences >= 1);
+    assert.ok(sanitized.itinerary[0].morning.length > 0);
   });
 
   console.log('\n--- 3. Testing Accommodation Guidance & Pricing ---');
 
-  await runTest('6. Unknown hotel name is removed', () => {
+  await runTest('6. Valid hotel name remains in guidance and unsupported price is removed', () => {
     const plan = createBaseTravelPlan();
-    plan.accommodationGuidance = 'Stay at Chandekasare Royal Palace Resort in the village for a luxury experience.';
+    plan.accommodationGuidance = 'Stay at Hotel Shirdi Grand Inn for ₹1,500/night with complimentary breakfast.';
 
     const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
 
-    assert.ok(!sanitized.accommodationGuidance.includes('Chandekasare Royal Palace Resort'));
-    assert.ok(validationReport.removedUnsupportedAccommodation >= 1);
+    assert.ok(sanitized.accommodationGuidance.includes('Hotel Shirdi Grand Inn'));
+    assert.ok(!sanitized.accommodationGuidance.includes('₹1,500/night'));
+    assert.ok(sanitized.accommodationGuidance.includes('(current accommodation pricing is unavailable)'));
+    assert.ok(validationReport.removedUnsupportedPrices >= 1);
   });
 
   await runTest('7. Valid hotel name remains', () => {
@@ -401,17 +408,19 @@ async function main() {
 
   console.log('\n--- 4. Testing Restaurant & Activity Validation ---');
 
-  await runTest('8. Unknown restaurant name is removed', () => {
+  await runTest('8. Unknown restaurant name is retained as unverified AI suggestion', () => {
     const plan = createBaseTravelPlan();
     plan.foodAndLocalExperiences.push({
       name: 'Chandekasare Heritage Kitchen',
       reason: 'Authentic local dishes'
     });
 
-    const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
+    const { plan: sanitized } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
 
-    assert.ok(!sanitized.foodAndLocalExperiences.some(f => f.name.includes('Chandekasare Heritage Kitchen')));
-    assert.ok(validationReport.removedPlaceReferences >= 1);
+    const kitchen = sanitized.foodAndLocalExperiences.find(f => f.name === 'Chandekasare Heritage Kitchen');
+    assert.ok(kitchen, 'Unverified dining suggestion must be preserved');
+    assert.equal(kitchen.verificationStatus, 'unverified');
+    assert.equal(kitchen.source, 'ai_suggestion');
   });
 
   await runTest('9. Generic food advice remains', () => {
@@ -426,17 +435,19 @@ async function main() {
     assert.ok(sanitized.foodAndLocalExperiences.some(f => f.name === 'Try local Maharashtrian cuisine'));
   });
 
-  await runTest('10. Unknown activity venue is removed', () => {
+  await runTest('10. Unknown activity venue is retained as unverified AI suggestion', () => {
     const plan = createBaseTravelPlan();
     plan.activities.push({
       name: 'Join the Chandekasare Heritage Village Tour',
       reason: 'Guided historical tour'
     });
 
-    const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
+    const { plan: sanitized } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
 
-    assert.ok(!sanitized.activities.some(a => a.name.includes('Chandekasare Heritage Village Tour')));
-    assert.ok(validationReport.removedPlaceReferences >= 1);
+    const tour = sanitized.activities.find(a => a.name === 'Join the Chandekasare Heritage Village Tour');
+    assert.ok(tour, 'Unverified activity suggestion must be preserved');
+    assert.equal(tour.verificationStatus, 'unverified');
+    assert.equal(tour.source, 'ai_suggestion');
   });
 
   await runTest('11. Generic activity remains', () => {
@@ -479,19 +490,18 @@ async function main() {
 
   console.log('\n--- 6. Testing Honesty in Rural Destinations ---');
 
-  await runTest('16. Missing accommodation remains honest', () => {
+  await runTest('16. Missing accommodation remains honest and unsourced price is sanitized', () => {
     const plan = createBaseTravelPlan();
     plan.accommodationGuidance = 'Book rooms at Chandekasare Guest House or Village Inn for ₹1,200/night.';
 
     const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockEmptyRuralCatalog);
 
-    assert.equal(sanitized.accommodationGuidance, 'No verified accommodation was found in the searched area.');
-    assert.ok(!sanitized.accommodationGuidance.includes('Chandekasare Guest House'));
     assert.ok(!sanitized.accommodationGuidance.includes('₹1,200'));
-    assert.ok(validationReport.removedUnsupportedAccommodation >= 1);
+    assert.ok(sanitized.accommodationGuidance.includes('(current accommodation pricing is unavailable)'));
+    assert.ok(validationReport.removedUnsupportedPrices >= 1);
   });
 
-  await runTest('17. Missing attraction remains honest', () => {
+  await runTest('17. Missing attraction in empty catalog: AI suggestions retained as unverified', () => {
     const plan = createBaseTravelPlan();
     plan.placesToVisit = [
       {
@@ -506,10 +516,13 @@ async function main() {
       }
     ];
 
-    const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockEmptyRuralCatalog);
+    const { plan: sanitized } = validateAndSanitizeTravelPlan(plan, mockEmptyRuralCatalog);
 
-    assert.equal(sanitized.placesToVisit.length, 0);
-    assert.ok(validationReport.removedPlaceReferences >= 2);
+    assert.equal(sanitized.placesToVisit.length, 2);
+    assert.equal(sanitized.placesToVisit[0].verificationStatus, 'unverified');
+    assert.equal(sanitized.placesToVisit[0].source, 'ai_suggestion');
+    assert.equal(sanitized.placesToVisit[1].verificationStatus, 'unverified');
+    assert.equal(sanitized.placesToVisit[1].source, 'ai_suggestion');
   });
 
   console.log('\n--- 7. Testing Deduplication, Free Text, & Schema Integrity ---');
@@ -528,17 +541,15 @@ async function main() {
     assert.equal(sanitized.placesToVisit.length, 1);
   });
 
-  await runTest('19. Gemini-generated unsupported place in free text is sanitized where deterministic', () => {
+  await runTest('19. Itinerary schedule preserves AI suggestions without fake catalog IDs', () => {
     const plan = createBaseTravelPlan();
-    // Free text contains an unverified landmark pattern without any valid place ID
     plan.itinerary[0].morning = 'Visit Chandekasare Village Square for morning tea and local chats.';
     plan.itinerary[0].morningPlaceId = undefined;
 
-    const { plan: sanitized, validationReport } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
+    const { plan: sanitized } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
 
-    assert.ok(!sanitized.itinerary[0].morning.includes('Chandekasare Village Square'));
-    assert.ok(sanitized.itinerary[0].morning.includes('Explore the local surroundings'));
-    assert.ok(validationReport.removedPlaceReferences >= 1);
+    assert.ok(sanitized.itinerary[0].morning.includes('Chandekasare Village Square'));
+    assert.equal(sanitized.itinerary[0].morningPlaceId, undefined);
   });
 
   await runTest('20. Fallback output is also validated', () => {
@@ -645,28 +656,39 @@ async function main() {
       catalogOverride: mockVerifiedCatalog
     });
 
-    // Verify that VP_FAKE_99 was stripped out by the validator during modification
+    // Verify that VP_FAKE_99 was stripped of fake catalog ID and retained as unverified AI suggestion
     assert.ok(result.plan);
     assert.ok(!result.plan.placesToVisit.some(p => p.verifiedPlaceId === 'VP_FAKE_99'));
-    assert.equal(result.plan.placesToVisit.length, 1);
+    assert.equal(result.plan.placesToVisit.length, 2);
     assert.equal(result.plan.placesToVisit[0].verifiedPlaceId, 'VP_01');
+    assert.equal(result.plan.placesToVisit[0].verificationStatus, 'verified');
+    assert.equal(result.plan.placesToVisit[1].verifiedPlaceId, null);
+    assert.equal(result.plan.placesToVisit[1].verificationStatus, 'unverified');
   });
 
-  await runTest('22. No fake replacement places are created', () => {
+  await runTest('22. Unverified places are normalized to unverified and invalid entries are dropped', () => {
     const plan = createBaseTravelPlan();
     plan.placesToVisit = [
       {
         verifiedPlaceId: 'VP_NONEXISTENT',
         name: 'Invented Place',
-        reason: 'Fake',
+        reason: 'Suggestion beyond catalog',
         bestTime: 'Morning'
-      }
+      },
+      {
+        name: '', // Invalid empty name
+        reason: 'Invalid',
+        bestTime: 'Any'
+      } as any
     ];
 
     const { plan: sanitized } = validateAndSanitizeTravelPlan(plan, mockVerifiedCatalog);
 
-    // Array must be empty, not populated with fabricated replacement places
-    assert.equal(sanitized.placesToVisit.length, 0);
+    // Empty name was dropped, valid name was normalized as unverified AI suggestion
+    assert.equal(sanitized.placesToVisit.length, 1);
+    assert.equal(sanitized.placesToVisit[0].name, 'Invented Place');
+    assert.equal(sanitized.placesToVisit[0].verificationStatus, 'unverified');
+    assert.equal(sanitized.placesToVisit[0].verifiedPlaceId, null);
   });
 
   await runTest('23. Existing valid TravelPlan fields remain intact', () => {

@@ -351,7 +351,11 @@ async function startServer(): Promise<void> {
     }
     console.log('[Startup] Database schema verified successfully.');
   } else {
-    console.log('[Notice] DATABASE_URL is not set. Demo/fallback mode is enabled. Database migrations skipped.');
+    if (process.env.NODE_ENV === 'production') {
+      console.error('[Startup Fatal Error] DATABASE_URL is strictly required in production environment. In-memory storage is disallowed.');
+      process.exit(1);
+    }
+    console.log('[Notice] DATABASE_URL is not set. Local development mode enabled with isolated in-memory storage.');
   }
 
   app.listen(PORT, () => {

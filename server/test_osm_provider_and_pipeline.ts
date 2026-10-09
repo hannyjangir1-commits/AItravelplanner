@@ -620,13 +620,18 @@ async function runTestSuite() {
 
     const { plan: validated, validationReport } = validateAndSanitizeTravelPlan(rawPlanFromGemini, catalog);
 
-    assert.equal(validationReport.removedPlaceReferences, 1, 'Must remove the 1 hallucinated place');
-    assert.equal(validated.placesToVisit.length, 1);
+    assert.equal(validationReport.unverifiedPlaceReferences, 1, 'Tracks 1 unverified AI place reference');
+    assert.equal(validationReport.validPlaceReferences, 2, 'Tracks 2 verified catalog place references (attraction + itinerary)');
+    assert.equal(validated.placesToVisit.length, 2);
     assert.equal(validated.placesToVisit[0].name, 'Gateway of India');
+    assert.equal(validated.placesToVisit[0].verificationStatus, 'verified');
+    assert.equal(validated.placesToVisit[1].name, 'The Hallucinated Sky Garden');
+    assert.equal(validated.placesToVisit[1].verificationStatus, 'unverified');
+    assert.equal(validated.placesToVisit[1].source, 'ai_suggestion');
     assert.ok(validated.accommodationGuidance.includes('The Taj Mahal Palace, Mumbai'));
   });
 
-  await test('4.2 Sparse rural destination validator removes fabricated hotel claims', () => {
+  await test('4.2 Sparse rural destination validator retains unverified suggestions with honest status', () => {
     const emptyCatalog: VerifiedPlaceCatalog = {
       destination: {
         originalInput: 'Chandekasare',
@@ -663,9 +668,11 @@ async function runTestSuite() {
 
     const { plan: validated, validationReport } = validateAndSanitizeTravelPlan(hallucinatedRuralPlan, emptyCatalog);
 
-    assert.ok(validated.accommodationGuidance.includes('No verified accommodation was found'));
-    assert.ok(!validated.accommodationGuidance.includes('Chandekasare Royal Heritage Palace Resort'));
-    assert.equal(validated.placesToVisit.length, 0, 'All unverified places must be stripped');
+    assert.equal(validated.placesToVisit.length, 1, 'Retains attraction as unverified suggestion');
+    assert.equal(validated.placesToVisit[0].name, 'Chandekasare Grand Theme Park');
+    assert.equal(validated.placesToVisit[0].verificationStatus, 'unverified');
+    assert.equal(validated.placesToVisit[0].source, 'ai_suggestion');
+    assert.equal(validationReport.unverifiedPlaceReferences, 1);
     assert.equal(validated.includeDayByDayItinerary, false);
     assert.equal(validated.itinerary.length, 0);
   });

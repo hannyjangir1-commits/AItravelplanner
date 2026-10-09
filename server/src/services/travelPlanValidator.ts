@@ -34,6 +34,7 @@ import { VerifiedPlaceCatalog } from './placeCatalog.js';
 export interface TravelPlanValidationReport {
   checkedPlaceReferences: number;
   validPlaceReferences: number;
+  unverifiedPlaceReferences?: number;
   removedPlaceReferences: number;
   correctedPlaceNames: number;
   removedUnsupportedPrices: number;
@@ -219,6 +220,7 @@ export function validateAndSanitizeTravelPlan(
   const report: TravelPlanValidationReport = {
     checkedPlaceReferences: 0,
     validPlaceReferences: 0,
+    unverifiedPlaceReferences: 0,
     removedPlaceReferences: 0,
     correctedPlaceNames: 0,
     removedUnsupportedPrices: 0,
@@ -243,8 +245,12 @@ export function validateAndSanitizeTravelPlan(
   // ==========================================================================
   const validPlacesToVisit: PlaceToVisit[] = [];
   const seenPlaceIds = new Set<string>();
+  const seenPlaceNames = new Set<string>();
 
   for (const p of sanitizedPlan.placesToVisit || []) {
+    if (!p || typeof p !== 'object' || typeof p.name !== 'string' || !p.name.trim()) {
+      continue;
+    }
     report.checkedPlaceReferences++;
 
     let matchedPlace: VerifiedPlace | undefined;
@@ -252,59 +258,68 @@ export function validateAndSanitizeTravelPlan(
     if (p.verifiedPlaceId) {
       matchedPlace = placeById.get(p.verifiedPlaceId);
       if (!matchedPlace) {
-        report.removedPlaceReferences++;
         report.warnings.push(
-          `Removed unverified attraction with unknown ID "${p.verifiedPlaceId}": "${p.name}".`
+          `Removed invalid/unknown catalog ID "${p.verifiedPlaceId}" from attraction "${p.name}". Retained as unverified AI suggestion.`
         );
-        continue;
+        p.verifiedPlaceId = null;
       }
-    } else {
+    }
+
+    if (!matchedPlace) {
       matchedPlace = placeByName.get(p.name.trim().toLowerCase());
-      if (matchedPlace) {
-        p.verifiedPlaceId = matchedPlace.internalId;
-      } else {
-        report.removedPlaceReferences++;
+    }
+
+    if (matchedPlace) {
+      // Deduplication check by catalog internal ID
+      if (seenPlaceIds.has(matchedPlace.internalId)) {
         report.warnings.push(
-          `Removed unverified attraction without catalog ID: "${p.name}".`
+          `Removed duplicate attraction recommendation for "${matchedPlace.name}" (${matchedPlace.internalId}).`
         );
         continue;
       }
-    }
+      seenPlaceIds.add(matchedPlace.internalId);
+      report.validPlaceReferences++;
 
-    // Deduplication check
-    if (seenPlaceIds.has(matchedPlace.internalId)) {
-      report.warnings.push(
-        `Removed duplicate attraction recommendation for "${matchedPlace.name}" (${matchedPlace.internalId}).`
+      // Override name with authoritative catalog name
+      if (p.name !== matchedPlace.name) {
+        report.correctedPlaceNames++;
+        report.warnings.push(
+          `Corrected attraction name "${p.name}" -> "${matchedPlace.name}" (${matchedPlace.internalId}).`
+        );
+        p.name = matchedPlace.name;
+      }
+      p.verifiedPlaceId = matchedPlace.internalId;
+      p.verificationStatus = 'verified';
+      p.source = 'catalog';
+
+      // Synchronize distance and locality in text
+      p.reason = syncPlaceDistanceAndLocality(
+        p.reason,
+        matchedPlace,
+        verifiedCatalog.destination.canonicalName,
+        report
       );
-      continue;
-    }
-    seenPlaceIds.add(matchedPlace.internalId);
-
-    report.validPlaceReferences++;
-
-    // Override name with authoritative catalog name
-    if (p.name !== matchedPlace.name) {
-      report.correctedPlaceNames++;
-      report.warnings.push(
-        `Corrected attraction name "${p.name}" -> "${matchedPlace.name}" (${matchedPlace.internalId}).`
+      p.bestTime = syncPlaceDistanceAndLocality(
+        p.bestTime,
+        matchedPlace,
+        verifiedCatalog.destination.canonicalName,
+        report
       );
-      p.name = matchedPlace.name;
-    }
-    p.verifiedPlaceId = matchedPlace.internalId;
+    } else {
+      // Unverified AI suggestion - preserve recommendation
+      const normName = p.name.trim().toLowerCase();
+      if (seenPlaceNames.has(normName)) {
+        report.warnings.push(`Removed duplicate attraction recommendation "${p.name}".`);
+        continue;
+      }
+      seenPlaceNames.add(normName);
 
-    // Synchronize distance and locality in text
-    p.reason = syncPlaceDistanceAndLocality(
-      p.reason,
-      matchedPlace,
-      verifiedCatalog.destination.canonicalName,
-      report
-    );
-    p.bestTime = syncPlaceDistanceAndLocality(
-      p.bestTime,
-      matchedPlace,
-      verifiedCatalog.destination.canonicalName,
-      report
-    );
+      p.verifiedPlaceId = null;
+      p.verificationStatus = 'unverified';
+      p.source = 'ai_suggestion';
+      report.unverifiedPlaceReferences = (report.unverifiedPlaceReferences || 0) + 1;
+      report.warnings.push(`Retained unverified AI attraction suggestion: "${p.name}".`);
+    }
 
     validPlacesToVisit.push(p);
   }
@@ -315,8 +330,12 @@ export function validateAndSanitizeTravelPlan(
   // ==========================================================================
   const validFood: FoodOrExperience[] = [];
   const seenFoodIds = new Set<string>();
+  const seenFoodNames = new Set<string>();
 
   for (const f of sanitizedPlan.foodAndLocalExperiences || []) {
+    if (!f || typeof f !== 'object' || typeof f.name !== 'string' || !f.name.trim()) {
+      continue;
+    }
     report.checkedPlaceReferences++;
 
     let matchedPlace: VerifiedPlace | undefined;
@@ -324,17 +343,15 @@ export function validateAndSanitizeTravelPlan(
     if (f.verifiedPlaceId) {
       matchedPlace = placeById.get(f.verifiedPlaceId);
       if (!matchedPlace) {
-        report.removedPlaceReferences++;
         report.warnings.push(
-          `Removed unverified restaurant with unknown ID "${f.verifiedPlaceId}": "${f.name}".`
+          `Removed invalid/unknown catalog ID "${f.verifiedPlaceId}" from restaurant "${f.name}".`
         );
-        continue;
+        f.verifiedPlaceId = null;
       }
-    } else {
+    }
+
+    if (!matchedPlace) {
       matchedPlace = placeByName.get(f.name.trim().toLowerCase());
-      if (matchedPlace) {
-        f.verifiedPlaceId = matchedPlace.internalId;
-      }
     }
 
     if (matchedPlace) {
@@ -355,23 +372,29 @@ export function validateAndSanitizeTravelPlan(
         f.name = matchedPlace.name;
       }
       f.verifiedPlaceId = matchedPlace.internalId;
+      f.verificationStatus = 'verified';
+      f.source = 'catalog';
       f.reason = syncPlaceDistanceAndLocality(
         f.reason,
         matchedPlace,
         verifiedCatalog.destination.canonicalName,
         report
       );
-      validFood.push(f);
     } else {
-      // If not in catalog, check if it claims a specific commercial establishment
-      if (isSpecificCommercialEstablishment(f.name)) {
-        report.removedPlaceReferences++;
-        report.warnings.push(`Removed unverified dining establishment: "${f.name}".`);
+      // Unverified AI restaurant or culinary experience
+      const normName = f.name.trim().toLowerCase();
+      if (seenFoodNames.has(normName)) {
         continue;
       }
-      // Legitimate generic food advice remains
-      validFood.push(f);
+      seenFoodNames.add(normName);
+
+      f.verifiedPlaceId = null;
+      f.verificationStatus = 'unverified';
+      f.source = 'ai_suggestion';
+      report.unverifiedPlaceReferences = (report.unverifiedPlaceReferences || 0) + 1;
     }
+
+    validFood.push(f);
   }
   sanitizedPlan.foodAndLocalExperiences = validFood;
 
@@ -380,8 +403,12 @@ export function validateAndSanitizeTravelPlan(
   // ==========================================================================
   const validActivities: Activity[] = [];
   const seenActivityIds = new Set<string>();
+  const seenActivityNames = new Set<string>();
 
   for (const a of sanitizedPlan.activities || []) {
+    if (!a || typeof a !== 'object' || typeof a.name !== 'string' || !a.name.trim()) {
+      continue;
+    }
     report.checkedPlaceReferences++;
 
     let matchedPlace: VerifiedPlace | undefined;
@@ -389,17 +416,15 @@ export function validateAndSanitizeTravelPlan(
     if (a.verifiedPlaceId) {
       matchedPlace = placeById.get(a.verifiedPlaceId);
       if (!matchedPlace) {
-        report.removedPlaceReferences++;
         report.warnings.push(
-          `Removed unverified activity venue with unknown ID "${a.verifiedPlaceId}": "${a.name}".`
+          `Removed invalid/unknown catalog ID "${a.verifiedPlaceId}" from activity "${a.name}".`
         );
-        continue;
+        a.verifiedPlaceId = null;
       }
-    } else {
+    }
+
+    if (!matchedPlace) {
       matchedPlace = placeByName.get(a.name.trim().toLowerCase());
-      if (matchedPlace) {
-        a.verifiedPlaceId = matchedPlace.internalId;
-      }
     }
 
     if (matchedPlace) {
@@ -420,77 +445,46 @@ export function validateAndSanitizeTravelPlan(
         a.name = matchedPlace.name;
       }
       a.verifiedPlaceId = matchedPlace.internalId;
+      a.verificationStatus = 'verified';
+      a.source = 'catalog';
       a.reason = syncPlaceDistanceAndLocality(
         a.reason,
         matchedPlace,
         verifiedCatalog.destination.canonicalName,
         report
       );
-      validActivities.push(a);
     } else {
-      // If not in catalog, check if it claims a specific commercial venue or tour
-      if (isSpecificCommercialVenueOrTour(a.name)) {
-        report.removedPlaceReferences++;
-        report.warnings.push(`Removed unverified activity venue or tour: "${a.name}".`);
+      // Unverified AI activity or curated experience
+      const normName = a.name.trim().toLowerCase();
+      if (seenActivityNames.has(normName)) {
         continue;
       }
-      // Generic activity remains
-      validActivities.push(a);
+      seenActivityNames.add(normName);
+
+      a.verifiedPlaceId = null;
+      a.verificationStatus = 'unverified';
+      a.source = 'ai_suggestion';
+      report.unverifiedPlaceReferences = (report.unverifiedPlaceReferences || 0) + 1;
     }
+
+    validActivities.push(a);
   }
   sanitizedPlan.activities = validActivities;
 
   // ==========================================================================
   // 4. Validate Accommodation Guidance & Prices
   // ==========================================================================
+  let guidance = sanitizedPlan.accommodationGuidance || '';
+  // Sanitize unsupported numeric room tariffs / prices
+  guidance = sanitizePricesFromText(guidance, report, 'accommodationGuidance');
+
   const verifiedAccommodations = verifiedCatalog.byCategory.accommodation;
-
   if (verifiedAccommodations.length === 0) {
-    // 0 verified accommodations in catalog
-    const claimsAccommodations = /\b(hotel|resort|lodge|inn|guesthouse|homestay|stay at|rooms?|tariff)\b/i.test(
-      sanitizedPlan.accommodationGuidance
-    );
-    if (claimsAccommodations) {
-      report.removedUnsupportedAccommodation++;
+    if (!guidance || guidance.trim() === '') {
+      guidance = 'No verified accommodation was found in the searched area. Consider homestays or lodging in neighboring towns.';
     }
-    const claimsPrice = /(?:₹|Rs\.?|INR|\/night|per night)\s*[\d,]+/i.test(
-      sanitizedPlan.accommodationGuidance
-    );
-    if (claimsPrice) {
-      report.removedUnsupportedPrices++;
-    }
-
-    // Strictly enforce honest guidance
-    sanitizedPlan.accommodationGuidance =
-      'No verified accommodation was found in the searched area.';
-  } else {
-    // Verified accommodations exist
-    let guidance = sanitizedPlan.accommodationGuidance;
-
-    // Sanitize any unsupported numeric prices
-    guidance = sanitizePricesFromText(guidance, report, 'accommodationGuidance');
-
-    // Verify hotel mentions
-    const hotelMentionRegex = /\b(?:Stay at\s+|Hotel\s+|Resort\s+|Lodge\s+)([A-Z][a-zA-Z0-9'\s]+?\b)/g;
-    let match: RegExpExecArray | null;
-    while ((match = hotelMentionRegex.exec(guidance)) !== null) {
-      const candidateName = match[1].trim();
-      const fullMention = match[0].trim();
-      const isVerified = verifiedAccommodations.some(va => {
-        const vName = va.name.toLowerCase();
-        const cName = candidateName.toLowerCase();
-        return vName.includes(cName) || cName.includes(vName);
-      });
-
-      if (!isVerified) {
-        report.removedUnsupportedAccommodation++;
-        report.warnings.push(`Removed unverified hotel mention: "${fullMention}".`);
-        guidance = guidance.replace(fullMention, 'local verified accommodation options');
-      }
-    }
-
-    sanitizedPlan.accommodationGuidance = guidance;
   }
+  sanitizedPlan.accommodationGuidance = guidance;
 
   // ==========================================================================
   // 5. Validate Itinerary Schedules and Day Place IDs
@@ -519,19 +513,17 @@ export function validateAndSanitizeTravelPlan(
             report
           );
         } else {
-          // Invalid ID: remove structured reference
-          report.removedPlaceReferences++;
+          // Invalid ID: remove structured reference ID, but retain the itinerary schedule text
           report.warnings.push(
             `Removed invalid itinerary place ID "${placeId}" on Day ${day.day} (${slot.textKey}).`
           );
           day[slot.idKey] = undefined;
-          day[slot.textKey] = sanitizeFreeTextItinerary(day[slot.textKey], verifiedCatalog, report);
         }
       } else {
         // ID missing: check if text deterministically mentions a catalog place
         let attachedPlace: VerifiedPlace | undefined;
         for (const p of verifiedCatalog.places) {
-          if (p.name.length > 3 && day[slot.textKey].toLowerCase().includes(p.name.toLowerCase())) {
+          if (p.name.length > 3 && day[slot.textKey]?.toLowerCase().includes(p.name.toLowerCase())) {
             attachedPlace = p;
             break;
           }
@@ -547,8 +539,6 @@ export function validateAndSanitizeTravelPlan(
             verifiedCatalog.destination.canonicalName,
             report
           );
-        } else {
-          day[slot.textKey] = sanitizeFreeTextItinerary(day[slot.textKey], verifiedCatalog, report);
         }
       }
     }

@@ -31,8 +31,15 @@ interface UserDbRow {
   place: string | null;
 }
 
-// In-memory store when DATABASE_URL is not configured (e.g. local dev / testing)
+// In-memory store strictly for local dev/testing when DATABASE_URL is not configured
 const memUsers = new Map<string, UserWithPassword & { email?: string | null; profilePicture?: string | null }>();
+
+function isDevInMemoryAllowed(): boolean {
+  if (process.env.NODE_ENV === 'production') {
+    return false;
+  }
+  return !process.env.DATABASE_URL;
+}
 
 /**
  * Creates a new user record in PostgreSQL with a hashed password.
@@ -41,6 +48,9 @@ const memUsers = new Map<string, UserWithPassword & { email?: string | null; pro
  */
 export async function createUser(username: string, passwordHash: string): Promise<UserRecord> {
   if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
     const id = randomUUID();
     const cleanUsername = username.trim();
     const record: UserWithPassword = {
@@ -80,6 +90,9 @@ export async function createUser(username: string, passwordHash: string): Promis
  */
 export async function getUserByUsername(username: string): Promise<UserWithPassword | null> {
   if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
     const target = username.trim().toLowerCase();
     for (const u of memUsers.values()) {
       if (u.username.toLowerCase() === target) {
@@ -118,6 +131,9 @@ export async function getUserByUsername(username: string): Promise<UserWithPassw
  */
 export async function getUserById(id: string): Promise<UserRecord | null> {
   if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
     const u = memUsers.get(id);
     if (!u) return null;
     return {
@@ -183,6 +199,9 @@ export async function updateUserProfile(
   }
 
   if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
     const u = memUsers.get(id);
     if (!u) return null;
     if (updateName) u.name = nameValue;

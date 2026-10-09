@@ -420,9 +420,9 @@ async function runAllTests() {
     assert.ok(capturedPrompt.includes('VP_01'), 'Prompt must include internalId VP_01');
     assert.ok(capturedPrompt.includes('Shri Ram Mandir Chandekasare'), 'Prompt must include place name');
 
-    // Rule 5: Prompt explicitly forbids invented places
-    assert.ok(capturedPrompt.includes('CRITICAL GROUNDING REQUIREMENT:'));
-    assert.ok(capturedPrompt.includes('Do NOT invent any hotel, attraction, temple, restaurant'));
+    // Rule 5: Prompt instructs model on verified catalog IDs and grounding
+    assert.ok(capturedPrompt.includes('GROUNDING & FORMAT REQUIREMENTS:'));
+    assert.ok(capturedPrompt.includes('Reference verified catalog places using their exact name and internalId'));
 
     // Rule 9 & 12: Parsed plan preserves verified place IDs and structure
     const plan = result.plan;

@@ -1,17 +1,29 @@
+export type PlaceVerificationStatus = 'verified' | 'unverified';
+export type PlaceSource = 'catalog' | 'ai_suggestion';
+
 export interface PlaceToVisit {
+  verifiedPlaceId?: string | null;
   name: string;
   reason: string;
   bestTime: string;
+  verificationStatus?: PlaceVerificationStatus;
+  source?: PlaceSource;
 }
 
 export interface FoodOrExperience {
+  verifiedPlaceId?: string | null;
   name: string;
   reason: string;
+  verificationStatus?: PlaceVerificationStatus;
+  source?: PlaceSource;
 }
 
 export interface Activity {
+  verifiedPlaceId?: string | null;
   name: string;
   reason: string;
+  verificationStatus?: PlaceVerificationStatus;
+  source?: PlaceSource;
 }
 
 export interface DayPlan {
@@ -33,6 +45,11 @@ export interface TravelPlan {
   itinerary: DayPlan[];
   includeDayByDayItinerary?: boolean;
   generatedAt?: string;
+  resolvedDestination?: {
+    canonicalName: string;
+    formattedAddress: string;
+    originalInput?: string;
+  };
 }
 
 export type AccommodationType = 'Budget' | 'Moderate' | 'Premium';

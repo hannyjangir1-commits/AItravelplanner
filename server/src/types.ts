@@ -1,22 +1,31 @@
 import type { ResolvedDestination } from './services/destinationResolver.js';
 
+export type PlaceVerificationStatus = 'verified' | 'unverified';
+export type PlaceSource = 'catalog' | 'ai_suggestion';
+
 export interface PlaceToVisit {
-  verifiedPlaceId?: string;
+  verifiedPlaceId?: string | null;
   name: string;
   reason: string;
   bestTime: string;
+  verificationStatus?: PlaceVerificationStatus;
+  source?: PlaceSource;
 }
 
 export interface FoodOrExperience {
-  verifiedPlaceId?: string;
+  verifiedPlaceId?: string | null;
   name: string;
   reason: string;
+  verificationStatus?: PlaceVerificationStatus;
+  source?: PlaceSource;
 }
 
 export interface Activity {
-  verifiedPlaceId?: string;
+  verifiedPlaceId?: string | null;
   name: string;
   reason: string;
+  verificationStatus?: PlaceVerificationStatus;
+  source?: PlaceSource;
 }
 
 export interface DayPlan {

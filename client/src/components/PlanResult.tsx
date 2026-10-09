@@ -376,6 +376,19 @@ export const PlanResult: React.FC<PlanResultProps> = ({
             </div>
 
             <h1 className="summary-destination-name">{tripDetails.destination}</h1>
+            {plan.resolvedDestination && (
+              <div className="summary-destination-area" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88rem', color: 'var(--text-secondary)', marginTop: '0.2rem', marginBottom: '0.6rem' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" style={{ flexShrink: 0, color: 'var(--color-primary)' }}>
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                  <circle cx="12" cy="10" r="3"></circle>
+                </svg>
+                <span>
+                  {plan.resolvedDestination.canonicalName.toLowerCase() !== tripDetails.destination.toLowerCase()
+                    ? `Region: ${plan.resolvedDestination.canonicalName} (${plan.resolvedDestination.formattedAddress})`
+                    : plan.resolvedDestination.formattedAddress}
+                </span>
+              </div>
+            )}
 
             {isDemo && planMessage && !showModifiedSuccess && (
               <div className="plan-status-message-banner" role="status" aria-live="polite">
@@ -522,7 +535,21 @@ export const PlanResult: React.FC<PlanResultProps> = ({
               {plan.placesToVisit.map((place, idx) => (
                 <li key={idx} className="structured-item-entry" role="listitem">
                   <div className="entry-head">
-                    <span className="entry-name">{place.name}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span className="entry-name">{place.name}</span>
+                      {place.verificationStatus === 'verified' || place.verifiedPlaceId ? (
+                        <span className="entry-badge-verified" title="Verified place backed by mapping catalog">
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                          <span>Verified</span>
+                        </span>
+                      ) : (
+                        <span className="entry-badge-unverified" title="AI suggestion — not independently verified">
+                          AI suggestion — not independently verified
+                        </span>
+                      )}
+                    </div>
                     {place.bestTime && (
                       <span className="entry-badge-gold">
                         Best Time: {place.bestTime}
@@ -554,6 +581,18 @@ export const PlanResult: React.FC<PlanResultProps> = ({
                 <li key={idx} className="structured-item-entry" role="listitem">
                   <div className="entry-head">
                     <span className="entry-name">{food.name}</span>
+                    {food.verificationStatus === 'verified' || food.verifiedPlaceId ? (
+                      <span className="entry-badge-verified" title="Verified place backed by mapping catalog">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        <span>Verified</span>
+                      </span>
+                    ) : (
+                      <span className="entry-badge-unverified" title="AI suggestion — not independently verified">
+                        AI suggestion — not independently verified
+                      </span>
+                    )}
                   </div>
                   <p className="entry-desc">{food.reason}</p>
                 </li>
@@ -581,6 +620,18 @@ export const PlanResult: React.FC<PlanResultProps> = ({
                 <li key={idx} className="structured-item-entry" role="listitem">
                   <div className="entry-head">
                     <span className="entry-name">{act.name}</span>
+                    {act.verificationStatus === 'verified' || act.verifiedPlaceId ? (
+                      <span className="entry-badge-verified" title="Verified place backed by mapping catalog">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        <span>Verified</span>
+                      </span>
+                    ) : (
+                      <span className="entry-badge-unverified" title="AI suggestion — not independently verified">
+                        AI suggestion — not independently verified
+                      </span>
+                    )}
                   </div>
                   <p className="entry-desc">{act.reason}</p>
                 </li>
