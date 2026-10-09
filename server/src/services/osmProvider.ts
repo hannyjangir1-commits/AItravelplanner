@@ -268,10 +268,13 @@ function checkAmbiguity(results: any[], query: string): void {
   const top = results[0];
   const second = results[1];
 
-  // If top item has overwhelming importance advantage (> 0.2 difference), top match is clear
   const topImp = Number(top.importance) || 0;
   const secondImp = Number(second.importance) || 0;
-  if (topImp - secondImp > 0.25) return;
+
+  // If the second match is negligible noise (< 0.05) or top match has dominant prominence, match is clear
+  if (secondImp < 0.05) return;
+  if (topImp - secondImp >= 0.15) return;
+  if (secondImp > 0 && (topImp / secondImp) >= 2.0) return;
 
   // Check if they are in completely different countries or states
   const topCountry = top.address?.country?.toLowerCase();
