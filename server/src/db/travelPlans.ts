@@ -310,3 +310,120 @@ export async function getTravelPlanByIdForUser(
     updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString()
   };
 }
+
+export interface UpdatedTravelPlanResult {
+  id: string;
+  updatedAt: string;
+}
+
+/**
+ * Updates an existing saved travel plan's plan_data JSONB and updated_at timestamp.
+ *
+ * CRITICAL SECURITY & DATA ISOLATION:
+ * - Scoped strictly to both itinerary ID and authenticated user ID:
+ *   WHERE id = $2 AND user_id = $3
+ * - Returns null if the itinerary does not exist OR belongs to another user.
+ * - Guarantees parameterized SQL.
+ */
+export async function updateSavedTravelPlan(
+  id: string,
+  userId: string,
+  updatedPlan: TravelPlan
+): Promise<UpdatedTravelPlanResult | null> {
+  if (!id || typeof id !== 'string' || id.trim() === '') {
+    throw new Error('Valid itinerary ID is required to update travel plan.');
+  }
+  if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+    throw new Error('Valid authenticated user ID is required to update travel plan.');
+  }
+
+  const planToSave: TravelPlan = {
+    ...updatedPlan,
+    includeDayByDayItinerary: typeof updatedPlan.includeDayByDayItinerary === 'boolean'
+      ? updatedPlan.includeDayByDayItinerary
+      : (Array.isArray(updatedPlan.itinerary) && updatedPlan.itinerary.length > 0)
+  };
+
+  if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
+    const p = memPlans.get(id.trim());
+    if (!p || p.userId !== userId.trim()) {
+      return null;
+    }
+    const now = new Date().toISOString();
+    p.planData = planToSave;
+    p.updatedAt = now;
+    return {
+      id: p.id,
+      updatedAt: now
+    };
+  }
+
+  const updateSql = `
+    UPDATE travel_plans
+    SET
+      plan_data = $1::jsonb,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2 AND user_id = $3
+    RETURNING id, updated_at;
+  `;
+
+  const result = await pool.query<{ id: string; updated_at: Date | string }>(updateSql, [
+    JSON.stringify(planToSave),
+    id.trim(),
+    userId.trim()
+  ]);
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString()
+  };
+}
+
+/**
+ * Deletes a saved travel plan belonging strictly to the authenticated user.
+ *
+ * CRITICAL SECURITY & DATA ISOLATION:
+ * - Scoped strictly to both itinerary ID and authenticated user ID:
+ *   WHERE id = $1 AND user_id = $2
+ * - Never deletes across users or allows ID-only deletion.
+ */
+export async function deleteTravelPlanForUser(
+  id: string,
+  userId: string
+): Promise<boolean> {
+  if (!id || typeof id !== 'string' || id.trim() === '') {
+    throw new Error('Valid itinerary ID is required to delete travel plan.');
+  }
+  if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+    throw new Error('Valid authenticated user ID is required to delete travel plan.');
+  }
+
+  if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
+    }
+    const p = memPlans.get(id.trim());
+    if (!p || p.userId !== userId.trim()) {
+      return false;
+    }
+    memPlans.delete(id.trim());
+    return true;
+  }
+
+  const deleteSql = `
+    DELETE FROM travel_plans
+    WHERE id = $1 AND user_id = $2
+    RETURNING id;
+  `;
+
+  const result = await pool.query(deleteSql, [id.trim(), userId.trim()]);
+  return (result.rowCount ?? 0) > 0;
+}

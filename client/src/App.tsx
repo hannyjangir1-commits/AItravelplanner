@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TravelPlan, TripFormData, UserProfile, ItinerarySummary, SavedItineraryDetail } from './types';
-import { generateTravelPlan, modifyTravelPlan, fetchCurrentUser, fetchTravelPlans, fetchTravelPlanById } from './api';
+import { generateTravelPlan, modifyTravelPlan, fetchCurrentUser, fetchTravelPlans, fetchTravelPlanById, deleteTravelPlan } from './api';
 import { Header } from './components/Header';
 import { HeroLanding } from './components/HeroLanding';
 import { TravelForm } from './components/TravelForm';
@@ -22,9 +22,15 @@ export function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [initialSession] = useState<StoredSessionState>(() => loadStoredSession());
   const [currentPlan, setCurrentPlan] = useState<TravelPlan | null>(initialSession.plan);
+  const [currentPlanId, setCurrentPlanId] = useState<string | null>(null);
   const [currentTripDetails, setCurrentTripDetails] = useState<TripFormData | null>(initialSession.details);
   const [isDemoPlan, setIsDemoPlan] = useState<boolean>(initialSession.isDemo);
   const [planMessage, setPlanMessage] = useState<string | null>(initialSession.message);
+
+  // In-flight request cancellation refs to prevent async race conditions
+  const historyAbortRef = useRef<AbortController | null>(null);
+  const detailAbortRef = useRef<AbortController | null>(null);
+  const generateAbortRef = useRef<AbortController | null>(null);
 
   // Client-side routing state for public legal pages (/privacy, /terms)
   const [currentRoute, setCurrentRoute] = useState<string>(() => window.location.pathname);
@@ -53,30 +59,41 @@ export function App() {
 
   // Fetch authenticated user profile on application startup
   useEffect(() => {
-    fetchCurrentUser()
+    const abortController = new AbortController();
+    fetchCurrentUser({ signal: abortController.signal })
       .then((currentUser) => {
         setUser(currentUser);
       })
       .catch(() => {
         setUser(null);
       });
+    return () => abortController.abort();
   }, []);
 
-  // History loading callback
+  // History loading callback with in-flight cancellation
   const loadHistory = useCallback(async () => {
     if (!user) {
       setSavedItineraries([]);
       return;
     }
+    if (historyAbortRef.current) {
+      historyAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+
     setIsLoadingHistory(true);
     setHistoryError(null);
     try {
-      const list = await fetchTravelPlans();
+      const list = await fetchTravelPlans({ signal: controller.signal });
       setSavedItineraries(list);
-    } catch {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       setHistoryError('Unable to load previous itineraries.');
     } finally {
-      setIsLoadingHistory(false);
+      if (historyAbortRef.current === controller) {
+        setIsLoadingHistory(false);
+      }
     }
   }, [user]);
 
@@ -134,14 +151,22 @@ export function App() {
 
     // Immediately clear previous plan display and session storage so previous/stale results never linger
     setCurrentPlan(null);
+    setCurrentPlanId(null);
     setCurrentTripDetails(null);
     setIsDemoPlan(false);
     setPlanMessage(null);
     clearAppSessionStorage();
 
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
+
     try {
-      const response = await generateTravelPlan(formData);
+      const response = await generateTravelPlan(formData, { signal: controller.signal });
+      if (controller.signal.aborted || generateAbortRef.current !== controller) {
+        return;
+      }
       setCurrentPlan(response.plan);
+      setCurrentPlanId(response.id || null);
       setCurrentTripDetails(formData);
       setIsDemoPlan(response.isDemo);
       setPlanMessage(response.message || null);
@@ -162,9 +187,12 @@ export function App() {
         }
       }, 100);
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       setErrorMessage(err.message || 'An error occurred while generating your travel plan. Please check your network and try again.');
     } finally {
-      setIsLoading(false);
+      if (generateAbortRef.current === controller) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -175,17 +203,29 @@ export function App() {
     setModifyError(null);
 
     try {
-      const response = await modifyTravelPlan(currentTripDetails, currentPlan, modificationRequest);
+      const response = await modifyTravelPlan(
+        currentTripDetails,
+        currentPlan,
+        modificationRequest,
+        currentPlanId || undefined
+      );
 
       // Save updated plan in session storage so it persists across manual page refreshes
       saveAppSessionStorage(response.plan, currentTripDetails, response.isDemo, response.message);
 
       // Instantaneous in-place state update without an expensive browser page reload
       setCurrentPlan(response.plan);
+      if (response.id) {
+        setCurrentPlanId(response.id);
+      }
       setIsDemoPlan(response.isDemo);
       setPlanMessage(response.message || null);
       setShowModifiedSuccess(true);
       setIsModifying(false);
+
+      if (user) {
+        loadHistory();
+      }
 
       // Smoothly scroll to the very start of the updated plan
       setTimeout(() => {
@@ -202,11 +242,21 @@ export function App() {
 
   const handleSelectPreviousItinerary = async (id: string) => {
     if (loadingDetailId) return;
+    if (detailAbortRef.current) {
+      detailAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
+
     setLoadingDetailId(id);
     setDetailError(null);
     try {
-      const detail = await fetchTravelPlanById(id);
+      const detail = await fetchTravelPlanById(id, { signal: controller.signal });
+      if (controller.signal.aborted || detailAbortRef.current !== controller) {
+        return;
+      }
       setOpenedSavedItinerary(detail);
+      setCurrentPlanId(detail.id);
       setTimeout(() => {
         const el = document.getElementById('plan-results');
         if (el) {
@@ -214,9 +264,12 @@ export function App() {
         }
       }, 50);
     } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       setDetailError(err.message || 'Unable to load itinerary.');
     } finally {
-      setLoadingDetailId(null);
+      if (detailAbortRef.current === controller) {
+        setLoadingDetailId(null);
+      }
     }
   };
 
@@ -249,13 +302,24 @@ export function App() {
         includeDayByDayItinerary: openedSavedItinerary.includeDayByDayItinerary ?? (openedSavedItinerary.plan?.includeDayByDayItinerary ?? (Array.isArray(openedSavedItinerary.plan?.itinerary) && openedSavedItinerary.plan.itinerary.length > 0))
       };
 
-      const response = await modifyTravelPlan(tripFormData, openedSavedItinerary.plan, modificationRequest);
+      const response = await modifyTravelPlan(
+        tripFormData,
+        openedSavedItinerary.plan,
+        modificationRequest,
+        openedSavedItinerary.id
+      );
+
       setOpenedSavedItinerary({
         ...openedSavedItinerary,
-        plan: response.plan
+        plan: response.plan,
+        updatedAt: response.updatedAt || new Date().toISOString()
       });
       setShowModifiedSuccess(true);
       setIsModifying(false);
+
+      if (user) {
+        loadHistory();
+      }
 
       setTimeout(() => {
         const el = document.getElementById('plan-results');
@@ -269,9 +333,45 @@ export function App() {
     }
   };
 
+  const handleDeleteItinerary = async (id: string) => {
+    try {
+      await deleteTravelPlan(id);
+      if (openedSavedItinerary?.id === id) {
+        setOpenedSavedItinerary(null);
+      }
+      if (currentPlanId === id) {
+        setCurrentPlanId(null);
+        setCurrentPlan(null);
+        setCurrentTripDetails(null);
+        clearAppSessionStorage();
+      }
+      await loadHistory();
+    } catch (err: any) {
+      setHistoryError(err.message || 'Unable to delete itinerary.');
+    }
+  };
+
+  const handleLogout = () => {
+    if (historyAbortRef.current) historyAbortRef.current.abort();
+    if (detailAbortRef.current) detailAbortRef.current.abort();
+    if (generateAbortRef.current) generateAbortRef.current.abort();
+    setUser(null);
+    setCurrentPlan(null);
+    setCurrentPlanId(null);
+    setCurrentTripDetails(null);
+    setOpenedSavedItinerary(null);
+    setDetailError(null);
+    setSavedItineraries([]);
+    setErrorMessage(null);
+    setModifyError(null);
+    setShowModifiedSuccess(false);
+    clearAppSessionStorage();
+  };
+
   const handleStartNewPlan = () => {
     clearAppSessionStorage();
     setCurrentPlan(null);
+    setCurrentPlanId(null);
     setCurrentTripDetails(null);
     setOpenedSavedItinerary(null);
     setDetailError(null);
@@ -360,12 +460,7 @@ export function App() {
           hasPlan={false}
           user={user}
           onUpdateUser={setUser}
-          onLogout={() => {
-            setUser(null);
-            setSavedItineraries([]);
-            setOpenedSavedItinerary(null);
-            setDetailError(null);
-          }}
+          onLogout={handleLogout}
           onOpenAuth={() => navigate('/signin')}
         />
         <PrivacyPolicy
@@ -412,12 +507,7 @@ export function App() {
           hasPlan={false}
           user={user}
           onUpdateUser={setUser}
-          onLogout={() => {
-            setUser(null);
-            setSavedItineraries([]);
-            setOpenedSavedItinerary(null);
-            setDetailError(null);
-          }}
+          onLogout={handleLogout}
           onOpenAuth={() => navigate('/signin')}
         />
         <TermsOfService
@@ -463,12 +553,7 @@ export function App() {
         hasPlan={Boolean(currentPlan || openedSavedItinerary)}
         user={user}
         onUpdateUser={setUser}
-        onLogout={() => {
-          setUser(null);
-          setSavedItineraries([]);
-          setOpenedSavedItinerary(null);
-          setDetailError(null);
-        }}
+        onLogout={handleLogout}
         onOpenAuth={() => navigate('/signin')}
       />
 
@@ -522,6 +607,7 @@ export function App() {
                   error={historyError}
                   onSelectItinerary={handleSelectPreviousItinerary}
                   loadingId={loadingDetailId}
+                  onDeleteItinerary={handleDeleteItinerary}
                 />
               </div>
             )}

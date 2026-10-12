@@ -227,23 +227,16 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
 
   console.log('[DB Startup] Connecting to PostgreSQL to apply schema and migrations...');
 
-  let client;
-  try {
-    client = await pool.connect();
-  } catch (connErr: any) {
-    const sanitizedError = {
-      message: connErr?.message,
-      code: connErr?.code,
-      name: connErr?.name
-    };
-    console.error('[DB Startup Fatal] Database connection failed:', sanitizedError);
-    return {
-      success: false,
-      message: `Database connection failed: ${connErr?.message || connErr}`
-    };
-  }
+  const MIGRATION_ADVISORY_LOCK_ID = 84729104;
+  let client: any = null;
+  let lockAcquired = false;
+  let userCols: string[] = [];
 
   try {
+    client = await pool.connect();
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_ADVISORY_LOCK_ID]);
+    lockAcquired = true;
+
     // 1. Attempt pgcrypto extension safely (catch if unprivileged cloud DB user, since PostgreSQL 13+ has built-in gen_random_uuid())
     try {
       await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
@@ -275,6 +268,24 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
     // 4. Ensure unique and performance indexes on users
     await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique ON users(username);');
     await client.query('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);');
+
+    // Safe pre-check for any legacy case-variant duplicate usernames before applying index
+    const dupCheck = await client.query(`
+      SELECT LOWER(username) AS lower_username, COUNT(*) as cnt
+      FROM users
+      WHERE username IS NOT NULL
+      GROUP BY LOWER(username)
+      HAVING COUNT(*) > 1;
+    `);
+
+    if (dupCheck.rows.length > 0) {
+      console.warn('[DB Startup Warning] Case-insensitive duplicate usernames detected:');
+      dupCheck.rows.forEach((r: { lower_username: string; cnt: string | number }) => {
+        console.warn(` - Username variant key: '${r.lower_username}' (${r.cnt} records). Deduplication recommended.`);
+      });
+    } else {
+      await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users(LOWER(username)) WHERE username IS NOT NULL;');
+    }
 
     // 5. Ensure travel_plans table exists
     await client.query(`
@@ -332,7 +343,7 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
       ORDER BY ordinal_position;
     `);
 
-    const userCols = colCheck.rows.map((r: { column_name: string }) => r.column_name);
+    userCols = colCheck.rows.map((r: { column_name: string }) => r.column_name);
     console.log('[DB Startup] Verified users table columns:', userCols.join(', '));
 
     const hasUsername = userCols.includes('username');
@@ -346,24 +357,7 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
     }
 
     console.log('[DB Startup] Database schema and column verification succeeded.');
-    client.release();
-    client = null;
-
-    // 10. Run signup diagnostic probe (safe test with transaction rollback)
-    const diagResult = await runSignupDiagnosticTest();
-    if (!diagResult.success) {
-      throw new Error(`Signup diagnostic probe failed: ${diagResult.message}`);
-    }
-
-    return {
-      success: true,
-      message: `Database schema verified successfully. Columns: ${userCols.join(', ')}`
-    };
   } catch (err: any) {
-    if (client) {
-      client.release();
-      client = null;
-    }
     const sanitizedError = {
       message: err?.message,
       code: err?.code,
@@ -376,7 +370,33 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
       success: false,
       message: err?.message || String(err)
     };
+  } finally {
+    if (client) {
+      if (lockAcquired) {
+        try {
+          await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_ID]);
+        } catch (unlockErr: any) {
+          console.warn('[DB Startup Warning] Failed to release advisory lock:', unlockErr?.message || unlockErr);
+        }
+      }
+      client.release();
+    }
   }
+
+  // 10. Run signup diagnostic probe (safe test with transaction rollback)
+  const diagResult = await runSignupDiagnosticTest();
+  if (!diagResult.success) {
+    console.error('[DB Startup Fatal Error] Signup diagnostic probe failed:', diagResult.message);
+    return {
+      success: false,
+      message: `Signup diagnostic probe failed: ${diagResult.message}`
+    };
+  }
+
+  return {
+    success: true,
+    message: `Database schema verified successfully. Columns: ${userCols.join(', ')}`
+  };
 }
 
 /**

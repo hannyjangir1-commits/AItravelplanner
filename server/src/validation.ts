@@ -234,9 +234,18 @@ export function validateModifyPlanRequest(input: any): ValidationResult<ModifyPl
     return { isValid: false, error: 'Request body must be a valid JSON object.' };
   }
 
-  const { originalDetails, currentPlan, modificationRequest } = input;
+  const { originalDetails, currentPlan, modificationRequest, itineraryId } = input;
 
-  // 1. Modification Request: non-empty string, max 1000 chars
+  // 1. Optional Itinerary ID: must be valid UUID if provided
+  let cleanItineraryId: string | undefined = undefined;
+  if (itineraryId !== undefined && itineraryId !== null) {
+    if (!isValidUuid(itineraryId)) {
+      return { isValid: false, error: 'Invalid itinerary ID format.' };
+    }
+    cleanItineraryId = String(itineraryId).trim();
+  }
+
+  // 2. Modification Request: non-empty string, max 1000 chars
   if (!modificationRequest || typeof modificationRequest !== 'string' || modificationRequest.trim() === '') {
     return { isValid: false, error: 'Please enter a modification request (e.g. "Add more food places").' };
   }
@@ -245,7 +254,7 @@ export function validateModifyPlanRequest(input: any): ValidationResult<ModifyPl
     return { isValid: false, error: 'Modification request must not exceed 1000 characters.' };
   }
 
-  // 2. Current Plan: must be structurally valid TravelPlan with 1-30 days
+  // 3. Current Plan: must be structurally valid TravelPlan with 1-30 days
   const sanitizedPlan = sanitizeCurrentPlan(currentPlan);
   if (!sanitizedPlan) {
     return {
@@ -254,7 +263,7 @@ export function validateModifyPlanRequest(input: any): ValidationResult<ModifyPl
     };
   }
 
-  // 3. Original Details: must satisfy GeneratePlanRequest schema
+  // 4. Original Details: must satisfy GeneratePlanRequest schema
   const originalValidation = validateGeneratePlanRequest(originalDetails);
   if (!originalValidation.isValid || !originalValidation.data) {
     return {
@@ -268,7 +277,8 @@ export function validateModifyPlanRequest(input: any): ValidationResult<ModifyPl
     data: {
       originalDetails: originalValidation.data,
       currentPlan: sanitizedPlan,
-      modificationRequest: cleanModRequest
+      modificationRequest: cleanModRequest,
+      itineraryId: cleanItineraryId
     }
   };
 }

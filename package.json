@@ -11,6 +11,7 @@
     "build": "npm run build:server && npm run build:client",
     "install:all": "npm install && npm install --prefix server && npm install --prefix client",
     "db:init": "npm run db:init --prefix server",
+    "test": "npm test --prefix server && npm test --prefix client",
     "start": "node server/dist/index.js"
   },
   "devDependencies": {

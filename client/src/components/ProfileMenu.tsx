@@ -18,6 +18,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
+  const avatarBtnRef = useRef<HTMLButtonElement>(null);
 
   // Sync inputs if user prop updates
   useEffect(() => {
@@ -44,6 +45,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
         setIsEditing(false);
         setErrorMessage(null);
         setSuccessMessage(null);
+        avatarBtnRef.current?.focus();
       }
     };
 
@@ -127,6 +129,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ user, onUpdateUser, on
     <div className="profile-menu-wrapper" ref={menuRef}>
       {/* Circular Profile Avatar Button */}
       <button
+        ref={avatarBtnRef}
         type="button"
         className="profile-avatar-btn"
         onClick={toggleOpen}

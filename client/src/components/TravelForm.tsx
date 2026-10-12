@@ -68,7 +68,12 @@ const GenerationLoadingProgress: React.FC<{ destination: string }> = React.memo(
   }, []);
 
   return (
-    <div className="generation-loading-container" role="status" aria-live="polite" aria-label={`Planning trip to ${destination.trim() || 'destination'}`}>
+    <div className="generation-loading-container" role="region" aria-label={`Planning trip to ${destination.trim() || 'destination'}`}>
+      {/* Dedicated screen reader live region announcing meaningful stage changes only (decoupled from 1-second timer updates) */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {`Planning trip to ${destination.trim() || 'destination'}. Stage: ${LOADING_STAGES[currentStageIndex].label}. ${LOADING_STAGES[currentStageIndex].desc}`}
+      </div>
+
       <div className="generation-loading-header">
         <span className="generation-spinner" aria-hidden="true"></span>
         <div className="generation-header-text">
@@ -79,7 +84,7 @@ const GenerationLoadingProgress: React.FC<{ destination: string }> = React.memo(
             Personalized destination intelligence in progress &bull; Please keep this window open
           </p>
         </div>
-        <div className="generation-elapsed-badge" aria-label={`${elapsedSeconds} seconds elapsed`}>
+        <div className="generation-elapsed-badge" aria-hidden="true">
           <span className="elapsed-pulse-dot" aria-hidden="true"></span>
           <span>{elapsedSeconds}s elapsed</span>
         </div>

@@ -36,5 +36,7 @@ CREATE TABLE IF NOT EXISTS travel_plans (
 );
 
 -- Indexes for performance and history queries
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users (LOWER(username)) WHERE username IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_travel_plans_user_id ON travel_plans(user_id);
 CREATE INDEX IF NOT EXISTS idx_travel_plans_created_at ON travel_plans(created_at DESC);

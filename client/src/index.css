@@ -2604,7 +2604,6 @@ textarea:focus-visible,
   border-radius: var(--radius-md);
   padding: 1.25rem;
   text-align: left;
-  cursor: pointer;
   transition: all var(--transition-normal);
   display: flex;
   flex-direction: column;
@@ -2615,15 +2614,39 @@ textarea:focus-visible,
   overflow: hidden;
 }
 
-.history-item-card:hover:not(:disabled) {
+.history-item-card:hover,
+.history-item-card:focus-within {
   background: #ffffff;
   border-color: var(--color-primary);
   box-shadow: var(--shadow-hover);
   transform: translateY(-2px);
 }
 
-.history-item-card:disabled {
-  opacity: 0.7;
+.history-item-card.is-loading {
+  opacity: 0.75;
+}
+
+.history-card-body-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  font-family: inherit;
+  color: inherit;
+  width: 100%;
+}
+
+.history-card-body-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
+}
+
+.history-card-body-btn:disabled {
   cursor: wait;
 }
 
@@ -2632,6 +2655,7 @@ textarea:focus-visible,
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.5rem;
+  width: 100%;
 }
 
 .history-card-dest {
@@ -2639,6 +2663,8 @@ textarea:focus-visible,
   font-weight: 700;
   color: var(--text-main);
   line-height: 1.3;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .history-card-days {
@@ -2656,6 +2682,7 @@ textarea:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  width: 100%;
 }
 
 .history-meta-chip {
@@ -2677,7 +2704,56 @@ textarea:focus-visible,
   border-top: 1px solid var(--border-light);
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.history-delete-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.3rem 0.5rem;
+  min-height: 36px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.76rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  z-index: 2;
+}
+
+.history-delete-btn:hover {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.history-delete-btn:focus-visible {
+  outline: 2px solid #dc2626;
+  outline-offset: 2px;
+}
+
+.history-open-btn {
+  background: transparent;
+  border: none;
+  padding: 0.3rem 0.4rem;
+  min-height: 36px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
+}
+
+.history-open-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.history-open-btn:disabled {
+  cursor: wait;
 }
 
 .history-open-link {
@@ -2690,7 +2766,8 @@ textarea:focus-visible,
   transition: gap var(--transition-fast);
 }
 
-.history-item-card:hover .history-open-link {
+.history-item-card:hover .history-open-link,
+.history-open-btn:focus-visible .history-open-link {
   color: var(--color-primary-hover);
   gap: 0.55rem;
 }
@@ -3550,6 +3627,46 @@ textarea:focus-visible,
   }
   .btn-auth-submit {
     height: 48px;
+  }
+  .previous-itineraries-card {
+    padding: 1.25rem 0.85rem;
+  }
+  .history-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  .profile-popover {
+    max-width: calc(100vw - 1.5rem);
+    right: -0.5rem;
+  }
+}
+
+/* Extra-Compact Viewports (<= 360px, e.g. 320px iPhone SE / small Android) */
+@media (max-width: 360px) {
+  .container {
+    padding: 0 0.5rem;
+  }
+  .enterprise-form-card,
+  .previous-itineraries-card,
+  .executive-card,
+  .day-timeline-card,
+  .modifier-console-card {
+    padding: 1rem 0.65rem;
+  }
+  .hero-headline {
+    font-size: 1.65rem;
+  }
+  .summary-destination-name {
+    font-size: 1.35rem;
+  }
+  .segmented-radio-btn {
+    padding: 0.65rem 0.5rem;
+  }
+  .auth-card {
+    padding: 1.25rem 0.85rem;
+  }
+  .history-card-dest {
+    font-size: 1rem;
   }
 }
 

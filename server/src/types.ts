@@ -71,6 +71,7 @@ export interface ModifyPlanRequest {
   originalDetails: GeneratePlanRequest;
   currentPlan: TravelPlan;
   modificationRequest: string;
+  itineraryId?: string;
 }
 
 export interface AuthenticatedUser {

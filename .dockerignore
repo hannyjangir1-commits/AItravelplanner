@@ -6,7 +6,14 @@ yarn-debug.log*
 yarn-error.log*
 **/.env*
 *.env
-*.env.local
+*.env.*
+.env
+.env.*
+*.pem
+*.key
+*.cert
+*.crt
+coverage/
 .git
 .gitignore
 client/dist

@@ -1,20 +1,77 @@
 import { Router, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { signAuthToken } from '../auth/jwt.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { createUser, getUserByUsername, getUserById, updateUserProfile } from '../db/users.js';
 import { requireAuth } from '../middleware/auth.js';
+import { getCsrfTokenEndpoint, CSRF_COOKIE_NAME, generateCsrfToken } from '../middleware/csrf.js';
 
 const router = Router();
 
 const AUTH_TOKEN_COOKIE = 'travelgenie_auth';
 const AUTH_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// Precomputed dummy scrypt hash for timing-attack mitigation when username does not exist
+const DUMMY_HASH = '0123456789abcdef0123456789abcdef:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+// Authentication rate limiters
+export const signinRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many sign-in attempts from your network. Please try again after 15 minutes.'
+  }
+});
+
+export const signupRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many account creation requests from your network. Please try again later.'
+  }
+});
+
+export const profileRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many profile update requests. Please try again later.'
+  }
+});
+
+/**
+ * GET /api/auth/csrf
+ * Returns current anti-CSRF token and ensures cookie is set.
+ */
+router.get('/csrf', getCsrfTokenEndpoint);
+
+/**
+ * Helper to ensure travelgenie_csrf cookie is seeded on successful authentication
+ */
+function seedCsrfCookie(req: Request, res: Response): void {
+  if (!req.cookies?.[CSRF_COOKIE_NAME] || req.cookies[CSRF_COOKIE_NAME].length !== 64) {
+    const token = generateCsrfToken();
+    res.cookie(CSRF_COOKIE_NAME, token, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/'
+    });
+  }
+}
+
 /**
  * POST /api/auth/signup
  * Registers a new user with username and password.
  * Hashes password securely, creates database record, and issues JWT session cookie.
  */
-router.post('/signup', async (req: Request, res: Response): Promise<void> => {
+router.post('/signup', signupRateLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const { username, password } = req.body || {};
 
@@ -23,13 +80,13 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const cleanUsername = username.trim();
+    const cleanUsername = username.trim().toLowerCase();
     if (cleanUsername.length < 3 || cleanUsername.length > 30) {
       res.status(400).json({ error: 'Username must be between 3 and 30 characters.' });
       return;
     }
 
-    if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
+    if (!/^[a-z0-9_]+$/.test(cleanUsername)) {
       res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores.' });
       return;
     }
@@ -70,6 +127,8 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
       maxAge: AUTH_TOKEN_MAX_AGE_MS
     });
 
+    seedCsrfCookie(req, res);
+
     res.status(201).json({
       authenticated: true,
       user: {
@@ -81,11 +140,7 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
   } catch (error: any) {
     console.error('[Signup Route Error]:', {
       message: error?.message || String(error),
-      code: error?.code,
-      detail: error?.detail,
-      column: error?.column,
-      table: error?.table,
-      constraint: error?.constraint
+      code: error?.code
     });
 
     if (error?.code === '23505') {
@@ -100,11 +155,10 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
 /**
  * POST /api/auth/signin
  * Authenticates user with username and password.
- * - If username does NOT exist: returns 404 with notFound flag to prompt Sign Up.
- * - If username exists but password is incorrect: returns 401 without redirecting.
- * - If credentials match: issues JWT session cookie.
+ * Security: Returns consistent 401 error response for non-existent users and invalid passwords.
+ * Uses timingSafe verification against dummy hash when user is absent to mitigate timing attacks.
  */
-router.post('/signin', async (req: Request, res: Response): Promise<void> => {
+router.post('/signin', signinRateLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
     const { username, password } = req.body || {};
 
@@ -113,13 +167,14 @@ router.post('/signin', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const cleanUsername = username.trim();
+    const cleanUsername = username.trim().toLowerCase();
     const user = await getUserByUsername(cleanUsername);
 
     if (!user) {
-      res.status(404).json({
-        error: 'Account does not exist. Please sign up.',
-        notFound: true
+      // Execute constant-work verification to prevent timing attack enumeration
+      await verifyPassword(password, DUMMY_HASH);
+      res.status(401).json({
+        error: 'Invalid username or password.'
       });
       return;
     }
@@ -146,6 +201,8 @@ router.post('/signin', async (req: Request, res: Response): Promise<void> => {
       maxAge: AUTH_TOKEN_MAX_AGE_MS
     });
 
+    seedCsrfCookie(req, res);
+
     res.status(200).json({
       authenticated: true,
       user: {
@@ -158,8 +215,7 @@ router.post('/signin', async (req: Request, res: Response): Promise<void> => {
   } catch (error: any) {
     console.error('[Signin Route Error]:', {
       message: error?.message || String(error),
-      code: error?.code,
-      detail: error?.detail
+      code: error?.code
     });
     res.status(500).json({ error: 'Failed to sign in. Please try again later.' });
   }
@@ -222,7 +278,7 @@ router.post('/logout', (_req: Request, res: Response): void => {
  * PATCH /api/auth/profile
  * Allows the authenticated user to update their display name and/or place.
  */
-router.patch('/profile', requireAuth, async (req: Request, res: Response): Promise<void> => {
+router.patch('/profile', requireAuth, profileRateLimiter, async (req: Request, res: Response): Promise<void> => {
   if (!req.user || !req.user.userId) {
     res.status(401).json({ authenticated: false });
     return;
@@ -233,21 +289,12 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
     return;
   }
 
-  // Reject modifications to sensitive fields
-  const DISALLOWED_FIELDS = [
-    'id',
-    'username',
-    'password',
-    'password_hash',
-    'google_id',
-    'googleId',
-    'email',
-    'created_at',
-    'updated_at'
-  ];
-  for (const field of DISALLOWED_FIELDS) {
-    if (field in req.body) {
-      res.status(400).json({ error: `Field '${field}' cannot be modified.` });
+  // Allow ONLY explicitly editable profile fields ('name' and 'place').
+  // Strictly rejects unknown fields, sensitive fields, and identity fields (id, email, password, etc.).
+  const ALLOWED_FIELDS = new Set(['name', 'place']);
+  for (const key of Object.keys(req.body)) {
+    if (!ALLOWED_FIELDS.has(key)) {
+      res.status(400).json({ error: `Field '${key}' is not allowed or cannot be modified.` });
       return;
     }
   }
@@ -259,8 +306,8 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
       return;
     }
     const trimmed = req.body.name.trim();
-    if (trimmed.length > 255) {
-      res.status(400).json({ error: 'Field "name" must not exceed 255 characters.' });
+    if (trimmed.length > 100) {
+      res.status(400).json({ error: 'Field "name" must not exceed 100 characters.' });
       return;
     }
     sanitizedName = trimmed.length > 0 ? trimmed : null;
@@ -273,15 +320,15 @@ router.patch('/profile', requireAuth, async (req: Request, res: Response): Promi
       return;
     }
     const trimmed = req.body.place.trim();
-    if (trimmed.length > 255) {
-      res.status(400).json({ error: 'Field "place" must not exceed 255 characters.' });
+    if (trimmed.length > 100) {
+      res.status(400).json({ error: 'Field "place" must not exceed 100 characters.' });
       return;
     }
     sanitizedPlace = trimmed.length > 0 ? trimmed : null;
   }
 
   if (sanitizedName === undefined && sanitizedPlace === undefined) {
-    res.status(400).json({ error: 'At least one field (name or place) must be provided.' });
+    res.status(400).json({ error: 'At least one editable field (name or place) must be provided.' });
     return;
   }
 

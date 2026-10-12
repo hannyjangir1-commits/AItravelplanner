@@ -8,7 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/db/migrations', {recursive:true}); if(fs.existsSync('src/db/schema.sql')) fs.copyFileSync('src/db/schema.sql', 'dist/db/schema.sql'); if(fs.existsSync('src/db/migrations')) for(const f of fs.readdirSync('src/db/migrations')) fs.copyFileSync('src/db/migrations/'+f, 'dist/db/migrations/'+f);\"",
     "start": "node dist/index.js",
-    "db:init": "node dist/db/init.js"
+    "db:init": "node dist/db/init.js",
+    "test": "tsx test_security_hardening.ts && tsx test_stage2_integrity.ts && tsx test_stage2_http_routes.ts"
   },
   "dependencies": {
     "@types/compression": "^1.8.1",

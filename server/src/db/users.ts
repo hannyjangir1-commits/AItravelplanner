@@ -47,12 +47,13 @@ function isDevInMemoryAllowed(): boolean {
  * Never returns password_hash to callers.
  */
 export async function createUser(username: string, passwordHash: string): Promise<UserRecord> {
+  const cleanUsername = username.trim().toLowerCase();
+
   if (!process.env.DATABASE_URL) {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
     }
     const id = randomUUID();
-    const cleanUsername = username.trim();
     const record: UserWithPassword = {
       id,
       username: cleanUsername,
@@ -74,11 +75,11 @@ export async function createUser(username: string, passwordHash: string): Promis
     VALUES ($1, $2)
     RETURNING id, username, name, place;
   `;
-  const result = await pool.query<UserDbRow>(insertSql, [username.trim(), passwordHash]);
+  const result = await pool.query<UserDbRow>(insertSql, [cleanUsername, passwordHash]);
   const row = result.rows[0];
   return {
     id: row.id,
-    username: row.username || username.trim(),
+    username: row.username || cleanUsername,
     name: row.name || null,
     place: row.place || null
   };
@@ -89,13 +90,14 @@ export async function createUser(username: string, passwordHash: string): Promis
  * Only used internally for sign-in comparison.
  */
 export async function getUserByUsername(username: string): Promise<UserWithPassword | null> {
+  const cleanUsername = username.trim().toLowerCase();
+
   if (!process.env.DATABASE_URL) {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('DATABASE_URL is not configured. PostgreSQL is strictly required in production.');
     }
-    const target = username.trim().toLowerCase();
     for (const u of memUsers.values()) {
-      if (u.username.toLowerCase() === target) {
+      if (u.username.toLowerCase() === cleanUsername) {
         return { ...u };
       }
     }
@@ -105,10 +107,10 @@ export async function getUserByUsername(username: string): Promise<UserWithPassw
   const sql = `
     SELECT id, username, password_hash, name, place
     FROM users
-    WHERE LOWER(username) = LOWER($1)
+    WHERE LOWER(username) = $1
     LIMIT 1;
   `;
-  const result = await pool.query<UserDbRow>(sql, [username.trim()]);
+  const result = await pool.query<UserDbRow>(sql, [cleanUsername]);
   if (result.rows.length === 0 || !result.rows[0].password_hash) {
     return null;
   }
@@ -118,7 +120,7 @@ export async function getUserByUsername(username: string): Promise<UserWithPassw
   }
   return {
     id: row.id,
-    username: row.username || username.trim(),
+    username: row.username || cleanUsername,
     passwordHash: row.password_hash,
     name: row.name || null,
     place: row.place || null

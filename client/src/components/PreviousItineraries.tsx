@@ -7,6 +7,7 @@ interface PreviousItinerariesProps {
   error: string | null;
   onSelectItinerary: (id: string) => void;
   loadingId: string | null;
+  onDeleteItinerary?: (id: string) => void;
 }
 
 /**
@@ -31,7 +32,8 @@ export const PreviousItineraries: React.FC<PreviousItinerariesProps> = ({
   isLoading,
   error,
   onSelectItinerary,
-  loadingId
+  loadingId,
+  onDeleteItinerary
 }) => {
   return (
     <section className="previous-itineraries-section" aria-labelledby="previous-itineraries-heading">
@@ -90,61 +92,93 @@ export const PreviousItineraries: React.FC<PreviousItinerariesProps> = ({
               {itineraries.map((item) => {
                 const isItemLoading = loadingId === item.id;
                 return (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
                     className={`history-item-card ${isItemLoading ? 'is-loading' : ''}`}
-                    onClick={() => onSelectItinerary(item.id)}
-                    disabled={isItemLoading}
                     role="listitem"
-                    aria-label={`Open itinerary for ${item.destination}`}
                   >
-                    <div className="history-card-top">
-                      <span className="history-card-dest">{item.destination}</span>
-                      <span className="history-card-days">
-                        {item.numberOfDays} {item.numberOfDays === 1 ? 'Day' : 'Days'}
-                      </span>
-                    </div>
-
-                    <div className="history-card-meta">
-                      <div className="history-meta-chip">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-                          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                          <circle cx="9" cy="7" r="4"></circle>
-                          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                        </svg>
-                        <span>{item.numberOfTravellers} {item.numberOfTravellers === 1 ? 'Traveller' : 'Travellers'}</span>
+                    <button
+                      type="button"
+                      className="history-card-body-btn"
+                      onClick={() => onSelectItinerary(item.id)}
+                      disabled={isItemLoading}
+                      aria-label={`Open itinerary for ${item.destination}, ${item.numberOfDays} ${item.numberOfDays === 1 ? 'day' : 'days'}`}
+                    >
+                      <div className="history-card-top">
+                        <span className="history-card-dest">{item.destination}</span>
+                        <span className="history-card-days">
+                          {item.numberOfDays} {item.numberOfDays === 1 ? 'Day' : 'Days'}
+                        </span>
                       </div>
 
-                      <div className="history-meta-chip">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                          <line x1="16" y1="2" x2="16" y2="6"></line>
-                          <line x1="8" y1="2" x2="8" y2="6"></line>
-                          <line x1="3" y1="10" x2="21" y2="10"></line>
-                        </svg>
-                        <span>{formatHistoryDate(item.createdAt)}</span>
+                      <div className="history-card-meta">
+                        <div className="history-meta-chip">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="9" cy="7" r="4"></circle>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                          </svg>
+                          <span>{item.numberOfTravellers} {item.numberOfTravellers === 1 ? 'Traveller' : 'Travellers'}</span>
+                        </div>
+
+                        <div className="history-meta-chip">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                            <line x1="16" y1="2" x2="16" y2="6"></line>
+                            <line x1="8" y1="2" x2="8" y2="6"></line>
+                            <line x1="3" y1="10" x2="21" y2="10"></line>
+                          </svg>
+                          <span>{formatHistoryDate(item.createdAt)}</span>
+                        </div>
                       </div>
-                    </div>
+                    </button>
 
                     <div className="history-card-action">
-                      {isItemLoading ? (
-                        <span className="history-loading-text">
-                          <span className="mini-spinner" aria-hidden="true"></span>
-                          Loading...
-                        </span>
-                      ) : (
-                        <span className="history-open-link">
-                          View Itinerary
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                            <line x1="5" y1="12" x2="19" y2="12"></line>
-                            <polyline points="12 5 19 12 12 19"></polyline>
+                      {onDeleteItinerary && (
+                        <button
+                          type="button"
+                          className="history-delete-btn"
+                          onClick={() => {
+                            if (window.confirm(`Are you sure you want to delete the saved itinerary for ${item.destination}?`)) {
+                              onDeleteItinerary(item.id);
+                            }
+                          }}
+                          title="Delete this itinerary"
+                          aria-label={`Delete itinerary for ${item.destination}`}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                           </svg>
-                        </span>
+                          <span>Delete</span>
+                        </button>
                       )}
+
+                      <button
+                        type="button"
+                        className="history-open-btn"
+                        onClick={() => onSelectItinerary(item.id)}
+                        disabled={isItemLoading}
+                        aria-label={`View itinerary for ${item.destination}`}
+                      >
+                        {isItemLoading ? (
+                          <span className="history-loading-text">
+                            <span className="mini-spinner" aria-hidden="true"></span>
+                            Loading...
+                          </span>
+                        ) : (
+                          <span className="history-open-link">
+                            View Itinerary
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                              <line x1="5" y1="12" x2="19" y2="12"></line>
+                              <polyline points="12 5 19 12 12 19"></polyline>
+                            </svg>
+                          </span>
+                        )}
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>

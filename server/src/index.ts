@@ -12,11 +12,13 @@ import cookieParser from 'cookie-parser';
 dns.setDefaultResultOrder('ipv4first');
 import { generateTravelPlanService, modifyTravelPlanService } from './aiService.js';
 import { validateGeneratePlanRequest, validateModifyPlanRequest, isValidUuid } from './validation.js';
-import { testDbConnection } from './db.js';
+import { testDbConnection, pool } from './db.js';
 import authRouter from './routes/auth.js';
 import { optionalAuth, requireAuth } from './middleware/auth.js';
-import { saveTravelPlan, getTravelPlansByUserId, getTravelPlanByIdForUser } from './db/travelPlans.js';
+import { saveTravelPlan, getTravelPlansByUserId, getTravelPlanByIdForUser, updateSavedTravelPlan, deleteTravelPlanForUser } from './db/travelPlans.js';
 import { runStartupMigrations, checkDbHealth } from './db/init.js';
+import { isAuthConfigured } from './auth/config.js';
+import { createCsrfMiddleware } from './middleware/csrf.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +29,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../server/.env') });
 // Secondary fallback: also attempt the current working directory .env (local dev / Docker)
 dotenv.config({ override: false });
 
-const app = express();
+export const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Enable trust proxy for Render reverse proxy HTTPS detection and secure cookies
@@ -39,12 +41,33 @@ app.disable('x-powered-by');
 // Performance: Gzip/Deflate compression for API JSON responses and static assets
 app.use(compression());
 
-// Security: Standard HTTP security headers
-app.use((_req: Request, res: Response, next: NextFunction) => {
+// Security: Standard HTTP security headers with strict CSP and conditional HSTS
+app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+
+  // Content Security Policy for React SPA, Google Fonts, and secure assets
+  const cspDirectives = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: blob: https:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'"
+  ].join('; ');
+  res.setHeader('Content-Security-Policy', cspDirectives);
+
+  // Strict-Transport-Security: Only when confirmed HTTPS in production
+  if (process.env.NODE_ENV === 'production' && (req.secure || req.headers['x-forwarded-proto'] === 'https')) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+
   next();
 });
 
@@ -66,56 +89,67 @@ app.all('/assets/*', (_req: Request, res: Response) => {
 // Serve remaining root static files (favicon, robots.txt, etc.)
 app.use(express.static(clientDistPath));
 
-// Security: Dynamic CORS configuration allowing localhost development, Render domains, and configured origins
-const defaultAllowedOrigins = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:5000',
-  'http://127.0.0.1:5000',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000'
-];
+/**
+ * Resolves the strict list of allowed origins.
+ * In development: includes local dev ports (5173, 5000, 3000) on localhost and 127.0.0.1.
+ * In production: strictly uses explicit origins from ALLOWED_ORIGINS / CORS_ORIGINS and RENDER_EXTERNAL_URL.
+ * Never reflects arbitrary origins and never allows wildcard '*' with credentials.
+ */
+export function getAllowedOrigins(): string[] {
+  const isProd = process.env.NODE_ENV === 'production';
+  const origins: string[] = [];
 
-const envOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
-  : [];
+  const rawOrigins = process.env.ALLOWED_ORIGINS || process.env.CORS_ORIGINS || '';
+  if (rawOrigins.trim()) {
+    const parsed = rawOrigins.split(',').map((o) => o.trim()).filter(Boolean);
+    origins.push(...parsed);
+  }
 
-if (process.env.RENDER_EXTERNAL_URL) {
-  envOrigins.push(process.env.RENDER_EXTERNAL_URL);
+  if (process.env.RENDER_EXTERNAL_URL) {
+    origins.push(process.env.RENDER_EXTERNAL_URL.trim());
+  }
+
+  if (!isProd) {
+    origins.push(
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5000',
+      'http://127.0.0.1:5000',
+      'http://localhost:3000',
+      'http://127.0.0.1:3000'
+    );
+  }
+
+  return Array.from(new Set(origins));
 }
 
-const allowedOrigins = [...defaultAllowedOrigins, ...envOrigins];
-
+// Security: Strict CORS policy rejecting untrusted domains
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow same-origin requests, local dev origins, or curl/server-to-server calls with no origin header
-    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+    // Allow non-browser calls (e.g. server-to-server, curl) or same-origin calls without Origin header
+    if (!origin) {
       return callback(null, true);
     }
 
-    try {
-      const parsedOrigin = new URL(origin);
-      if (
-        parsedOrigin.hostname === 'localhost' ||
-        parsedOrigin.hostname === '127.0.0.1' ||
-        parsedOrigin.hostname.endsWith('.onrender.com')
-      ) {
-        return callback(null, true);
-      }
-    } catch {
-      // Invalid URL format falls through
+    const allowed = getAllowedOrigins();
+    if (allowed.includes(origin)) {
+      return callback(null, true);
     }
 
-    // Disallow cross-origin requests by passing false (standard CORS rejection without throwing 500 Error)
+    // Reject cross-origin requests from unlisted domains without reflecting the origin
     callback(null, false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'Accept'],
+  exposedHeaders: ['X-CSRF-Token']
 }));
 
 // Cookie parsing middleware for authenticated sessions
 app.use(cookieParser());
+
+// Security: Anti-CSRF protection for state-changing requests on authenticated sessions
+app.use(createCsrfMiddleware(getAllowedOrigins));
 
 // Security: Enforce explicit 1mb body size limit to accommodate travel plans with verified place catalogs
 app.use(express.json({ limit: '1mb' }));
@@ -151,36 +185,67 @@ const aiRateLimiter = rateLimit({
   }
 });
 
-// Health check endpoint (safe status check without secret leakage)
-app.get('/api/health', (_req: Request, res: Response) => {
-  const isGeminiConfigured = Boolean(
-    process.env.GEMINI_API_KEY &&
-    process.env.GEMINI_API_KEY.trim() &&
-    process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here'
-  );
-  res.json({
-    success: true,
-    status: 'ok',
-    service: 'AI Travel Agent API',
-    providers: {
-      geminiConfigured: isGeminiConfigured,
-      geocodingProvider: 'openstreetmap_nominatim',
-      placeDiscoveryProvider: 'openstreetmap_overpass',
-      cacheStatus: 'active',
-      databaseConfigured: Boolean(process.env.DATABASE_URL)
+// Security: Account-level quota limiting for expensive AI operations (configurable, default 15 requests/hour)
+const userHourlyQuota = parseInt(process.env.AI_HOURLY_QUOTA_PER_USER || '15', 10);
+const aiUserQuotaLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: userHourlyQuota,
+  keyGenerator: (req: Request) => req.user?.userId || req.ip || 'anonymous',
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Account quota exceeded: You have reached the hourly limit for AI travel plan generations. Please try again later.'
+  }
+});
+
+// Security: In-flight request deduplication lock to avoid duplicate parallel charges from rapid clicks
+const activeAiUsers = new Set<string>();
+
+function acquireAiLock(userId: string): boolean {
+  if (activeAiUsers.has(userId)) {
+    return false;
+  }
+  activeAiUsers.add(userId);
+  return true;
+}
+
+function releaseAiLock(userId: string): void {
+  activeAiUsers.delete(userId);
+}
+
+/**
+ * Sanitizes server error messages to prevent accidental leakage of API keys or credentials in logs
+ */
+export function sanitizeLogMessage(input: any): string {
+  if (typeof input !== 'string') {
+    try {
+      input = JSON.stringify(input);
+    } catch {
+      input = String(input);
     }
+  }
+  return input
+    .replace(/((?:key|apiKey|password|secret|token|bearer|authorization)=)[^\s&"']+/gi, '$1REDACTED')
+    .replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+(@)/gi, '$1REDACTED$2');
+}
+
+// Health check endpoint (lightweight liveness probe for Docker and Render)
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    service: 'AI Travel Agent API'
   });
 });
 
-// Safe database health check endpoint
+// Safe database readiness check (safe boolean status without exposing internal schema, columns, or connection details)
 app.get('/api/db-health', async (_req: Request, res: Response) => {
   const health = await checkDbHealth();
   const statusCode = health.success ? 200 : 503;
   res.status(statusCode).json({
-    success: health.success,
-    database: health.database,
-    schemaReady: health.schemaReady,
-    requiredColumns: health.requiredColumns
+    status: health.success ? 'ready' : 'unavailable',
+    database: health.database
   });
 });
 
@@ -188,7 +253,21 @@ app.get('/api/db-health', async (_req: Request, res: Response) => {
 app.use('/api/auth', authRouter);
 
 // Endpoint 1: Generate initial travel plan
-app.post('/api/generate-travel-plan', requireAuth, aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
+app.post('/api/generate-travel-plan', requireAuth, aiRateLimiter, aiUserQuotaLimiter, async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user?.userId;
+  if (!userId) {
+    res.status(401).json({ authenticated: false });
+    return;
+  }
+
+  if (!acquireAiLock(userId)) {
+    res.status(429).json({
+      success: false,
+      error: 'A travel planning request is already being processed for your account. Please wait for it to finish.'
+    });
+    return;
+  }
+
   try {
     const validation = validateGeneratePlanRequest(req.body);
     if (!validation.isValid || !validation.data) {
@@ -202,35 +281,61 @@ app.post('/api/generate-travel-plan', requireAuth, aiRateLimiter, async (req: Re
     const result = await generateTravelPlanService(validation.data);
 
     // Persist the successfully generated itinerary to PostgreSQL for the authenticated user
-    if (req.user?.userId && result.plan) {
+    let savedPlan: { id: string; createdAt: string } | null = null;
+    if (result.plan) {
       try {
-        await saveTravelPlan(req.user.userId, validation.data, result.plan);
+        savedPlan = await saveTravelPlan(userId, validation.data, result.plan);
       } catch (dbError: any) {
-        // Robustness: DB unavailability must NOT fail plan generation or leak SQL/credentials
-        console.error('[TravelPlan Save DB Error]:', dbError?.message || dbError);
+        console.error('[TravelPlan Save DB Error]:', sanitizeLogMessage(dbError?.message || dbError));
       }
     }
 
     res.json({
       success: true,
       data: result.plan,
+      id: savedPlan?.id,
+      createdAt: savedPlan?.createdAt,
       isDemo: result.isDemo,
       message: result.message || (result.isDemo
         ? 'Generated in demo mode. Provide GEMINI_API_KEY in server/.env for live AI generation.'
         : 'Plan generated successfully.')
     });
   } catch (error: any) {
-    // Log technical error details internally for developers without exposing to clients
-    console.error('[Generate Plan Route Error]:', error?.message || error);
-    res.status(500).json({
+    console.error('[Generate Plan Route Error]:', sanitizeLogMessage(error?.message || error));
+
+    if (error?.name === 'DestinationAmbiguityError' || error?.isClientError) {
+      res.status(400).json({
+        success: false,
+        error: error.message || 'The specified destination could not be uniquely identified.'
+      });
+      return;
+    }
+
+    res.status(502).json({
       success: false,
-      error: error?.message || 'Failed to generate travel plan. Please try again later.'
+      error: 'Travel planning service is temporarily unable to generate your plan. Please check your inputs and try again.'
     });
+  } finally {
+    releaseAiLock(userId);
   }
 });
 
 // Endpoint 2: Modify existing travel plan
-app.post('/api/modify-travel-plan', requireAuth, aiRateLimiter, async (req: Request, res: Response): Promise<void> => {
+app.post('/api/modify-travel-plan', requireAuth, aiRateLimiter, aiUserQuotaLimiter, async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user?.userId;
+  if (!userId) {
+    res.status(401).json({ authenticated: false });
+    return;
+  }
+
+  if (!acquireAiLock(userId)) {
+    res.status(429).json({
+      success: false,
+      error: 'A travel planning modification is already in progress for your account. Please wait for it to finish.'
+    });
+    return;
+  }
+
   try {
     const validation = validateModifyPlanRequest(req.body);
     if (!validation.isValid || !validation.data) {
@@ -241,20 +346,67 @@ app.post('/api/modify-travel-plan', requireAuth, aiRateLimiter, async (req: Requ
       return;
     }
 
+    // If an itineraryId is provided, verify ownership before executing expensive AI operations
+    if (validation.data.itineraryId) {
+      const existing = await getTravelPlanByIdForUser(validation.data.itineraryId, userId);
+      if (!existing) {
+        res.status(404).json({
+          success: false,
+          error: 'The saved itinerary you are modifying does not exist or does not belong to your account.'
+        });
+        return;
+      }
+    }
+
     const result = await modifyTravelPlanService(validation.data);
+
+    // If modifying an existing saved itinerary, persist the updated plan to PostgreSQL
+    let updateResult: { id: string; updatedAt: string } | null = null;
+    if (validation.data.itineraryId && result.plan) {
+      try {
+        updateResult = await updateSavedTravelPlan(validation.data.itineraryId, userId, result.plan);
+        if (!updateResult) {
+          res.status(404).json({
+            success: false,
+            error: 'Failed to persist update: saved itinerary was not found or is unauthorized.'
+          });
+          return;
+        }
+      } catch (dbError: any) {
+        console.error('[TravelPlan Modify DB Error]:', sanitizeLogMessage(dbError?.message || dbError));
+        res.status(500).json({
+          success: false,
+          error: 'Failed to persist updated itinerary to database.'
+        });
+        return;
+      }
+    }
+
     res.json({
       success: true,
       data: result.plan,
+      id: updateResult?.id,
+      updatedAt: updateResult?.updatedAt,
       isDemo: result.isDemo,
       message: result.message || 'Plan updated successfully.'
     });
   } catch (error: any) {
-    // Log technical error details internally for developers without exposing to clients
-    console.error('[Modify Plan Route Error]:', error?.message || error);
-    res.status(500).json({
+    console.error('[Modify Plan Route Error]:', sanitizeLogMessage(error?.message || error));
+
+    if (error?.name === 'DestinationAmbiguityError' || error?.isClientError) {
+      res.status(400).json({
+        success: false,
+        error: error.message || 'The specified destination could not be uniquely identified.'
+      });
+      return;
+    }
+
+    res.status(502).json({
       success: false,
-      error: error?.message || 'Failed to modify travel plan. Please try again later.'
+      error: 'Travel planning service is temporarily unable to update your plan. Please try again later.'
     });
+  } finally {
+    releaseAiLock(userId);
   }
 });
 
@@ -315,6 +467,43 @@ app.get('/api/travel-plans/:id', requireAuth, async (req: Request, res: Response
   }
 });
 
+// Endpoint 5: Delete authenticated user's saved travel plan by ID
+app.delete('/api/travel-plans/:id', requireAuth, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+
+    const { id } = req.params;
+    if (!id || !isValidUuid(id)) {
+      res.status(400).json({
+        error: 'Invalid itinerary ID.'
+      });
+      return;
+    }
+
+    const deleted = await deleteTravelPlanForUser(id, userId);
+    if (!deleted) {
+      res.status(404).json({
+        error: 'Itinerary not found or unauthorized.'
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Itinerary deleted successfully.'
+    });
+  } catch (error: any) {
+    console.error('[Delete Travel Plan Route Error]:', error?.message || error);
+    res.status(500).json({
+      error: 'Unable to delete itinerary.'
+    });
+  }
+});
+
 // Explicit 404 handler for API routes
 app.all('/api/*', (_req: Request, res: Response) => {
   res.status(404).json({
@@ -340,6 +529,16 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 async function startServer(): Promise<void> {
+  // Validate JWT configuration before accepting requests
+  if (!isAuthConfigured()) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('[Startup Fatal Error] JWT_SECRET is missing or does not meet security requirements (minimum 32 characters, non-predictable). Startup aborted.');
+      process.exit(1);
+    } else {
+      console.warn('[Startup Warning] JWT_SECRET is missing or insecure in development. Please configure a strong secret in server/.env.');
+    }
+  }
+
   // If DATABASE_URL is configured, initialize database schema BEFORE starting HTTP server
   if (process.env.DATABASE_URL) {
     console.log('[Startup] DATABASE_URL detected. Initializing database schema and migrations...');
@@ -358,7 +557,7 @@ async function startServer(): Promise<void> {
     console.log('[Notice] DATABASE_URL is not set. Local development mode enabled with isolated in-memory storage.');
   }
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`AI Travel Agent server running on http://localhost:${PORT}`);
     if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here') {
       console.log('Notice: GEMINI_API_KEY is not set in server/.env. Demo fallback mode is enabled.');
@@ -368,9 +567,36 @@ async function startServer(): Promise<void> {
 
     console.log('OpenStreetMap discovery provider active (Nominatim + Overpass API). No paid maps API required.');
   });
+
+  const handleShutdown = async (signal: string) => {
+    console.log(`[Shutdown] Received ${signal}. Closing HTTP server...`);
+    server.close(async () => {
+      console.log('[Shutdown] HTTP server closed.');
+      if (process.env.DATABASE_URL) {
+        try {
+          await pool.end();
+          console.log('[Shutdown] Database connection pool closed successfully.');
+        } catch (poolErr: any) {
+          console.error('[Shutdown Error] Failed to close database pool:', poolErr?.message || poolErr);
+        }
+      }
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+  process.on('SIGINT', () => handleShutdown('SIGINT'));
 }
 
-startServer().catch((fatalErr) => {
-  console.error('[Server Fatal Error]:', fatalErr?.message || fatalErr);
-  process.exit(1);
-});
+const isDirectExecution = process.argv[1] && (
+  path.resolve(process.argv[1]) === path.resolve(__filename) ||
+  process.argv[1].endsWith('index.ts') ||
+  process.argv[1].endsWith('index.js')
+);
+
+if (isDirectExecution) {
+  startServer().catch((fatalErr) => {
+    console.error('[Server Fatal Error]:', fatalErr?.message || fatalErr);
+    process.exit(1);
+  });
+}
