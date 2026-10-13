@@ -157,14 +157,29 @@ export function App() {
     setPlanMessage(null);
     clearAppSessionStorage();
 
+    // Abort any prior in-flight generation request
+    if (generateAbortRef.current) {
+      generateAbortRef.current.abort();
+    }
+
     const controller = new AbortController();
     generateAbortRef.current = controller;
+    const clientStartTime = performance.now();
 
     try {
       const response = await generateTravelPlan(formData, { signal: controller.signal });
       if (controller.signal.aborted || generateAbortRef.current !== controller) {
         return;
       }
+
+      const clientDurationMs = Math.round(performance.now() - clientStartTime);
+      if (process.env.NODE_ENV !== 'production' || window.location.hostname === 'localhost') {
+        console.log(
+          `[Frontend Perf] Generation completed in ${clientDurationMs}ms`,
+          response.timing ? `(backend: ${response.timing.totalBackendMs}ms, gemini: ${response.timing.geminiMs}ms)` : ''
+        );
+      }
+
       setCurrentPlan(response.plan);
       setCurrentPlanId(response.id || null);
       setCurrentTripDetails(formData);
@@ -187,7 +202,9 @@ export function App() {
         }
       }, 100);
     } catch (err: any) {
-      if (err?.name === 'AbortError') return;
+      if (err?.name === 'AbortError' || controller.signal.aborted || generateAbortRef.current !== controller) {
+        return;
+      }
       setErrorMessage(err.message || 'An error occurred while generating your travel plan. Please check your network and try again.');
     } finally {
       if (generateAbortRef.current === controller) {

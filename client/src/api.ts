@@ -1,4 +1,4 @@
-import type { TravelPlan, TripFormData, UserProfile, ItinerarySummary, SavedItineraryDetail } from './types';
+import type { TravelPlan, TripFormData, UserProfile, ItinerarySummary, SavedItineraryDetail, GenerationTiming } from './types';
 import { validateAndSanitizeTravelPlan } from './storage';
 
 /**
@@ -250,6 +250,7 @@ export async function generateTravelPlan(
   createdAt?: string;
   isDemo: boolean;
   message?: string;
+  timing?: GenerationTiming;
 }> {
   const payload = {
     destination: formData.destination.trim(),
@@ -301,7 +302,8 @@ export async function generateTravelPlan(
     id: typeof data.id === 'string' ? data.id : undefined,
     createdAt: typeof data.createdAt === 'string' ? data.createdAt : undefined,
     isDemo: Boolean(data.isDemo),
-    message: typeof data.message === 'string' ? data.message : undefined
+    message: typeof data.message === 'string' ? data.message : undefined,
+    timing: (data.timing && typeof data.timing === 'object') ? data.timing as GenerationTiming : undefined
   };
 }
 

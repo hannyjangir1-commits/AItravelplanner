@@ -55,6 +55,19 @@ export interface TravelPlan {
 }
 
 
+export interface GenerationPerfMetrics {
+  correlationId: string;
+  totalBackendMs: number;
+  osmMs: number;
+  resolveMs: number;
+  catalogMs: number;
+  geminiMs: number;
+  model: string;
+  geminiAttempts: number;
+  parseValidationMs: number;
+  dbSaveMs?: number;
+}
+
 export interface GeneratePlanRequest {
   destination: string;
   numberOfDays: number;

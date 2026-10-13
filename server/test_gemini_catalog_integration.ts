@@ -457,7 +457,8 @@ async function runAllTests() {
       async () => {
         await generateTravelPlanService(sampleRequest, {
           catalogOverride: mockRuralCatalog,
-          fetchFn: mockFetch
+          fetchFn: mockFetch,
+          allowFallback: false
         });
       },
       (err: any) => {

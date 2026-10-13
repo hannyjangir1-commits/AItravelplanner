@@ -123,7 +123,7 @@ const DEFAULT_NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
 const DEFAULT_OVERPASS_BASE_URL = 'https://overpass-api.de/api/interpreter';
 const DEFAULT_USER_AGENT = 'TravelGenie-AITravelPlanner/1.0 (https://github.com/hannyjangir1-commits/AItravelplanner; info@travelgenie.local)';
 const DEFAULT_NOMINATIM_TIMEOUT_MS = 10000; // Strict 10s max per Nominatim request
-const DEFAULT_OVERPASS_TIMEOUT_MS = 20000;  // Strict 20s max per Overpass query
+const DEFAULT_OVERPASS_TIMEOUT_MS = 12000;  // Bounded 12s max per Overpass query
 
 export function getNominatimBaseUrl(): string {
   return (process.env.NOMINATIM_BASE_URL || DEFAULT_NOMINATIM_BASE_URL).replace(/\/+$/, '');
@@ -349,8 +349,18 @@ export async function geocodeDestinationWithOsm(
         })
       );
     } catch (err: any) {
-      if (err.name === 'TimeoutError' || err.message?.includes('timeout') || err.message?.includes('abort')) {
+      if (
+        err instanceof OsmTimeoutError ||
+        err?.name === 'OsmTimeoutError' ||
+        err?.name === 'TimeoutError' ||
+        err?.message?.includes('timeout') ||
+        err?.message?.includes('timed out') ||
+        err?.message?.includes('abort')
+      ) {
         throw new OsmTimeoutError(`Nominatim geocoding request timed out for "${cleanInput}".`);
+      }
+      if (err instanceof OsmRateLimitError || err?.name === 'OsmRateLimitError' || err?.statusCode === 429) {
+        throw err;
       }
       throw new OsmRequestError(`Nominatim network failure: ${err.message}`);
     }

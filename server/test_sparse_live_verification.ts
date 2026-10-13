@@ -371,7 +371,8 @@ async function runComprehensiveAudit() {
     await assert.rejects(
       async () => generateTravelPlanService(req, {
         catalogOverride: EMPTY_CATALOG,
-        fetchFn: mockFailingFetch
+        fetchFn: mockFailingFetch,
+        allowFallback: false
       }),
       (err: any) => {
         assert.ok(!err.message.toLowerCase().includes('pune'));
@@ -448,7 +449,7 @@ async function runComprehensiveAudit() {
     };
 
     await assert.rejects(
-      async () => generateTravelPlanService(req, { fetchFn: mockFetch }),
+      async () => generateTravelPlanService(req, { fetchFn: mockFetch, allowFallback: false }),
       (err: any) => {
         assert.ok(!err.message.toLowerCase().includes('pune'));
         assert.ok(err.message.includes('unavailable') || err.message.includes('503') || err.message.includes('AI'));

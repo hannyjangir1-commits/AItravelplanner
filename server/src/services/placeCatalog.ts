@@ -334,7 +334,14 @@ export async function buildVerifiedPlaceCatalog(
 
   // Query OpenStreetMap data via Overpass API (concentric expansion from 5km to 25km)
   let rawPlaces: InternalOsmPlace[] = [];
-  for (const r of radii) {
+  // Latency optimization: If using default radii and tier 1 (5km) lacks coverage,
+  // expand directly to maxRadius (25km) to capture all places in a single network round-trip.
+  // When customRadii is explicitly passed (e.g. in targeted tests), respect customRadii exactly.
+  const searchTiers: number[] = options.customRadii
+    ? radii
+    : (radii.length > 2 ? [radii[0], maxRadius] : radii);
+
+  for (const r of searchTiers) {
     const boundedRadius = Math.min(r, maxRadius);
     try {
       const placesAtTier = await searchOsmPlacesNearby(
@@ -466,7 +473,10 @@ export function formatCatalogForPrompt(catalog: VerifiedPlaceCatalog): string {
     if (list.length === 0) {
       lines.push('  (None found within 25 km of destination)');
     } else {
-      for (const p of list) {
+      // Latency & token optimization: Limit prompt serialized places to top 25 per category.
+      // Places are already sorted by locality relation, rating, and distance.
+      const itemsToFormat = list.slice(0, 25);
+      for (const p of itemsToFormat) {
         const parts: string[] = [
           `ID: ${p.internalId}`,
           `Name: "${p.name}"`,

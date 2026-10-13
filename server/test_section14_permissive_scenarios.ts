@@ -521,13 +521,20 @@ async function runSection14Suite() {
 
     const mockFailingFetch = createMockFetch('API Unavailable', 503);
 
+    // When allowFallback: false, it throws explicit error
     await assert.rejects(
-      async () => generateTravelPlanService(req, { catalogOverride: FULL_MUMBAI_CATALOG, fetchFn: mockFailingFetch }),
+      async () => generateTravelPlanService(req, { catalogOverride: FULL_MUMBAI_CATALOG, fetchFn: mockFailingFetch, allowFallback: false }),
       (err: any) => {
         assert.ok(!err.message.includes('Pune'));
         return true;
       }
     );
+
+    // When allowFallback: true (default), it produces grounded catalog fallback marked as isDemo: true
+    const fallbackResult = await generateTravelPlanService(req, { catalogOverride: FULL_MUMBAI_CATALOG, fetchFn: mockFailingFetch });
+    assert.equal(fallbackResult.isDemo, true);
+    assert.ok(fallbackResult.plan);
+    assert.ok(fallbackResult.plan.placesToVisit.length > 0);
   });
 
   // TEST 10 — DESTINATION RESOLUTION FAILURE

@@ -25,53 +25,104 @@ const ACTIVITY_OPTIONS: { id: ActivityLevelType; label: string; sub: string }[] 
   { id: 'Active', label: 'Active', sub: 'Full day exploring' }
 ];
 
-const LOADING_STAGES = [
+export interface LoadingProgressStage {
+  id: string;
+  label: string;
+  desc: string;
+}
+
+export const FULL_LOADING_STAGES: LoadingProgressStage[] = [
   {
+    id: 'preferences',
     label: 'Preparing travel preferences',
     desc: 'Analyzing destination parameters, duration, budget tier, and travel style'
   },
   {
+    id: 'recommendations',
     label: 'Generating personalized recommendations',
     desc: 'Curating accommodations, cultural dining, and places to visit'
   },
   {
+    id: 'itinerary',
     label: 'Building day-wise itinerary',
     desc: 'Structuring balanced morning, afternoon, and evening timeblocks'
   },
   {
+    id: 'finalizing',
     label: 'Finalizing travel plan',
     desc: 'Consolidating logistics, weather advice, and budget allocation tips'
   }
 ];
 
-const GenerationLoadingProgress: React.FC<{ destination: string }> = React.memo(({ destination }) => {
+export const GUIDE_LOADING_STAGES: LoadingProgressStage[] = [
+  {
+    id: 'preferences',
+    label: 'Preparing travel preferences',
+    desc: 'Analyzing destination parameters, duration, budget tier, and travel style'
+  },
+  {
+    id: 'recommendations',
+    label: 'Generating personalized recommendations',
+    desc: 'Curating accommodations, cultural dining, and places to visit'
+  },
+  {
+    id: 'finalizing',
+    label: 'Finalizing destination guide',
+    desc: 'Consolidating verified places, curated stays, dining, and travel tips'
+  }
+];
+
+export const GenerationLoadingProgress: React.FC<{
+  destination: string;
+  includeDayByDayItinerary?: boolean;
+}> = React.memo(({ destination, includeDayByDayItinerary = true }) => {
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isExtendedWait, setIsExtendedWait] = useState(false);
 
+  const stages = useMemo(() => {
+    return includeDayByDayItinerary ? FULL_LOADING_STAGES : GUIDE_LOADING_STAGES;
+  }, [includeDayByDayItinerary]);
+
   useEffect(() => {
+    setCurrentStageIndex(0);
+    setElapsedSeconds(0);
+    setIsExtendedWait(false);
+
     const interval = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
     }, 1000);
 
-    const timers: NodeJS.Timeout[] = [
-      setTimeout(() => setCurrentStageIndex(1), 2500),
-      setTimeout(() => setCurrentStageIndex(2), 5500),
-      setTimeout(() => setCurrentStageIndex(3), 9000),
-      setTimeout(() => setIsExtendedWait(true), 13000)
-    ];
+    const timers: NodeJS.Timeout[] = [];
+
+    if (includeDayByDayItinerary) {
+      timers.push(
+        setTimeout(() => setCurrentStageIndex(1), 2500),
+        setTimeout(() => setCurrentStageIndex(2), 5500),
+        setTimeout(() => setCurrentStageIndex(3), 9000),
+        setTimeout(() => setIsExtendedWait(true), 13000)
+      );
+    } else {
+      timers.push(
+        setTimeout(() => setCurrentStageIndex(1), 2500),
+        setTimeout(() => setCurrentStageIndex(2), 5500),
+        setTimeout(() => setIsExtendedWait(true), 9000)
+      );
+    }
 
     return () => {
       clearInterval(interval);
       timers.forEach(clearTimeout);
     };
-  }, []);
+  }, [includeDayByDayItinerary]);
+
+  const activeStage = stages[Math.min(currentStageIndex, stages.length - 1)] || stages[0];
 
   return (
     <div className="generation-loading-container" role="region" aria-label={`Planning trip to ${destination.trim() || 'destination'}`}>
       {/* Dedicated screen reader live region announcing meaningful stage changes only (decoupled from 1-second timer updates) */}
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {`Planning trip to ${destination.trim() || 'destination'}. Stage: ${LOADING_STAGES[currentStageIndex].label}. ${LOADING_STAGES[currentStageIndex].desc}`}
+        {`Planning trip to ${destination.trim() || 'destination'}. Stage: ${activeStage.label}. ${activeStage.desc}`}
       </div>
 
       <div className="generation-loading-header">
@@ -91,12 +142,12 @@ const GenerationLoadingProgress: React.FC<{ destination: string }> = React.memo(
       </div>
 
       <ol className="stages-timeline" aria-label="Trip planning progress stages">
-        {LOADING_STAGES.map((stage, idx) => {
+        {stages.map((stage, idx) => {
           const isCurrent = idx === currentStageIndex;
           const isCompleted = idx < currentStageIndex;
           return (
             <li
-              key={idx}
+              key={stage.id}
               className={`stage-timeline-item ${isCurrent ? 'active' : ''}`}
               aria-current={isCurrent ? 'step' : undefined}
             >
@@ -127,7 +178,9 @@ const GenerationLoadingProgress: React.FC<{ destination: string }> = React.memo(
             <polyline points="12 6 12 12 16 14"></polyline>
           </svg>
           <span>
-            Generation is still running. Synthesizing detailed schedules and budget breakdown for your destination...
+            {includeDayByDayItinerary
+              ? 'Generation is still running. Synthesizing detailed schedules and budget breakdown for your destination...'
+              : 'Generation is still running. Synthesizing verified places and destination intelligence...'}
           </span>
         </div>
       )}
@@ -214,9 +267,18 @@ export const TravelForm: React.FC<TravelFormProps> = ({ onSubmit, isLoading, err
     });
   };
 
+  const isSubmittingRef = React.useRef(false);
+
+  useEffect(() => {
+    if (!isLoading) {
+      isSubmittingRef.current = false;
+    }
+  }, [isLoading]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isValid || isLoading) return;
+    if (!isValid || isLoading || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     onSubmit(formData);
   };
 
@@ -558,7 +620,12 @@ export const TravelForm: React.FC<TravelFormProps> = ({ onSubmit, isLoading, err
             </div>
 
             {/* Professional Loading State */}
-            {isLoading && <GenerationLoadingProgress destination={formData.destination} />}
+            {isLoading && (
+              <GenerationLoadingProgress
+                destination={formData.destination}
+                includeDayByDayItinerary={formData.includeDayByDayItinerary !== false}
+              />
+            )}
 
             {/* Submit Button */}
             <div className="form-submit-footer">
@@ -568,12 +635,22 @@ export const TravelForm: React.FC<TravelFormProps> = ({ onSubmit, isLoading, err
                 className="btn-generate-plan"
                 disabled={!isValid || isLoading}
                 aria-busy={isLoading}
-                aria-label={isLoading ? 'Generating itinerary, please wait' : 'Generate Travel Plan'}
+                aria-label={
+                  isLoading
+                    ? (formData.includeDayByDayItinerary !== false
+                      ? 'Generating itinerary, please wait'
+                      : 'Generating destination guide, please wait')
+                    : 'Generate Travel Plan'
+                }
               >
                 {isLoading ? (
                   <>
                     <span className="spinner-ring" aria-hidden="true"></span>
-                    <span>Generating Itinerary...</span>
+                    <span>
+                      {formData.includeDayByDayItinerary !== false
+                        ? 'Generating Itinerary...'
+                        : 'Generating Destination Guide...'}
+                    </span>
                   </>
                 ) : (
                   <>

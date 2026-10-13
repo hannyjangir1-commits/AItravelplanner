@@ -203,7 +203,7 @@ The application adopts a decoupled client-server architecture:
 | **Build Tool & Bundler**| Vite | 8.3.0 | Fast HMR development server and optimized bundle compilation |
 | **Styling & Theme** | Vanilla CSS | CSS3 | Custom design system, dark mode, glassmorphism, responsive layout |
 | **Typography** | Google Fonts | Web Fonts | Modern typography: *Outfit* (headings) & *Plus Jakarta Sans* (body) |
-| **Backend Runtime** | Node.js | >= 18.0.0 | JavaScript runtime engine (tested on Node 20 & 24) |
+| **Backend Runtime** | Node.js | ^20.19.0 \|\| >= 22.12.0 | JavaScript runtime engine (Node 20+ LTS required for Vite 8, tested on Node 20 & 24) |
 | **Backend Framework** | Express | 4.21.2 | HTTP routing, request parsing, and error-handling middleware |
 | **Server Language** | TypeScript | 5.7.2 | Type-safe backend handlers and schema interfaces |
 | **Dev Execution** | tsx | 4.19.2 | High-performance TypeScript execution and watch daemon |
@@ -220,9 +220,11 @@ The backend interacts directly with the Google Gemini API using native `fetch` o
 
 ### 1. Ordered Model Cascade
 To balance latency, availability, and quota constraints, the backend implements a structured model fallback hierarchy:
-1. **`gemini-3.1-flash-lite`** *(Primary)*: Selected for minimal latency and high token throughput.
-2. **`gemini-3.5-flash`** *(Secondary)*: Fallback for complex structural reasoning and adherence.
-3. **`gemini-3.8-flash`** *(Tertiary)*: High-capability safety net if preceding models fail.
+1. **`gemini-3-flash-preview`** *(Primary)*: Current official high-speed flash model.
+2. **`gemini-3.8-flash`** *(Secondary)*: High-capability model fallback.
+3. **`gemini-3.5-flash`** *(Tertiary)*: High throughput fallback.
+4. **`gemini-3.6-flash`** *(Quaternary)*: Verified GA fallback.
+5. **`gemini-flash-latest`** *(Quinary)*: Canonical alias fallback.
 
 ### 2. Request Configuration
 - **Response Format**: Configured with `responseMimeType: 'application/json'` to enforce pure JSON output without Markdown wrapping.
@@ -506,7 +508,7 @@ Server environment variables are managed in `server/.env`.
 ## Local Setup & Installation
 
 ### Prerequisites
-- **Node.js**: Version `18.0.0` or higher (Node 20+ LTS recommended).
+- **Node.js**: Version `20.19.0` or higher (Node 20+ LTS required by Vite 8).
 - **npm**: Version `9.0.0` or higher.
 - **Git**: Installed on your development machine.
 

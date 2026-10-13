@@ -320,7 +320,8 @@ async function runPhase8Suite() {
       async () => {
         await generateTravelPlanService(req, {
           catalogOverride: MOCK_MUMBAI_CATALOG,
-          fetchFn: mockFetch
+          fetchFn: mockFetch,
+          allowFallback: false
         });
       },
       (err: any) => {
@@ -351,7 +352,8 @@ async function runPhase8Suite() {
       async () => {
         await generateTravelPlanService(req, {
           catalogOverride: MOCK_MUMBAI_CATALOG,
-          fetchFn: mockFetch
+          fetchFn: mockFetch,
+          allowFallback: false
         });
       },
       (err: any) => {
@@ -376,7 +378,8 @@ async function runPhase8Suite() {
         async () => {
           await generateTravelPlanService(req, {
             catalogOverride: MOCK_MUMBAI_CATALOG,
-            fetchFn: mockFetch
+            fetchFn: mockFetch,
+            allowFallback: false
           });
         },
         (err: any) => {
@@ -414,7 +417,8 @@ async function runPhase8Suite() {
       async () => {
         await generateTravelPlanService(req, {
           catalogOverride: MOCK_MUMBAI_CATALOG,
-          fetchFn: mockFetch
+          fetchFn: mockFetch,
+          allowFallback: false
         });
       },
       (err: any) => {
@@ -439,7 +443,8 @@ async function runPhase8Suite() {
       await assert.rejects(
         async () => {
           await generateTravelPlanService(req, {
-            catalogOverride: MOCK_MUMBAI_CATALOG
+            catalogOverride: MOCK_MUMBAI_CATALOG,
+            allowFallback: false
           });
         },
         (err: any) => {
@@ -840,7 +845,10 @@ async function runPhase8Suite() {
     assert.equal(wrongMatch, false);
 
     // Verify model configuration uses supported models
-    assert.ok(GEMINI_MODELS.includes('gemini-2.0-flash'));
+    assert.ok(GEMINI_MODELS.includes('gemini-3-flash-preview'));
+    assert.ok(GEMINI_MODELS.includes('gemini-3.8-flash'));
+    assert.ok(!(GEMINI_MODELS as readonly string[]).includes('gemini-2.0-flash'), 'gemini-2.0-flash must NOT be configured (retired)');
+    assert.ok(!(GEMINI_MODELS as readonly string[]).includes('gemini-2.5-flash'), 'gemini-2.5-flash must NOT be configured (retired)');
     assert.ok(!GEMINI_MODELS.includes('gemini-3.1-flash-lite' as any), 'gemini-3.1-flash-lite must NOT be configured');
   });
 

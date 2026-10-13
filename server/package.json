@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "db:init": "node dist/db/init.js",
     "db:reset": "node dist/db/reset.js",
-    "test": "tsx test_security_hardening.ts && tsx test_stage2_integrity.ts && tsx test_stage2_http_routes.ts"
+    "test": "tsx test_security_hardening.ts && tsx test_stage2_integrity.ts && tsx test_stage2_http_routes.ts && tsx test_perf_and_optimization.ts && tsx test_plan_generation_regression.ts"
   },
   "dependencies": {
     "@types/compression": "^1.8.1",

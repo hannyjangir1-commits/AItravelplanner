@@ -19,7 +19,9 @@ import {
   OsmNormalizedAddressComponent,
   OsmNoResultsError,
   OsmRequestError,
-  DestinationAmbiguityError
+  DestinationAmbiguityError,
+  OsmTimeoutError,
+  OsmRateLimitError
 } from './osmProvider.js';
 
 export interface NormalizedAddressComponent {
@@ -54,7 +56,7 @@ export interface ResolvedDestination {
   viewport?: NormalizedViewport;
 }
 
-export { DestinationAmbiguityError, OsmNoResultsError };
+export { DestinationAmbiguityError, OsmNoResultsError, OsmTimeoutError, OsmRateLimitError };
 
 /**
  * Resolves an arbitrary destination string to a canonical geographic anchor.

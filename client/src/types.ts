@@ -107,3 +107,16 @@ export interface SavedItineraryDetail {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface GenerationTiming {
+  correlationId: string;
+  totalBackendMs: number;
+  validationMs: number;
+  resolveMs: number;
+  catalogMs: number;
+  geminiMs: number;
+  parseValidationMs: number;
+  dbMs: number;
+  geminiCalls: number;
+  modelUsed: string;
+}

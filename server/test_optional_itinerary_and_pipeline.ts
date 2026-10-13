@@ -460,7 +460,8 @@ async function runSuite() {
       async () => {
         await generateTravelPlanService(req, {
           catalogOverride: MOCK_CATALOG,
-          fetchFn: async () => new Response('{}', { status: 500 })
+          fetchFn: async () => new Response('{}', { status: 500 }),
+          allowFallback: false
         });
       },
       (err: any) => {
