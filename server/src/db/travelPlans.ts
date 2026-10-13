@@ -156,6 +156,7 @@ export async function getTravelPlansByUserId(userId: string): Promise<CompactIti
     return Array.from(memPlans.values())
       .filter((p) => p.userId === userId.trim())
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 100)
       .map((p) => ({
         id: p.id,
         destination: p.destination,
@@ -169,7 +170,8 @@ export async function getTravelPlansByUserId(userId: string): Promise<CompactIti
     SELECT id, destination, number_of_days, number_of_travellers, created_at
     FROM travel_plans
     WHERE user_id = $1
-    ORDER BY created_at DESC;
+    ORDER BY created_at DESC
+    LIMIT 100;
   `;
 
   const result = await pool.query<TravelPlanSummaryRow>(querySql, [userId.trim()]);

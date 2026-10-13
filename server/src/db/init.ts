@@ -309,6 +309,7 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
     // 6. Ensure indexes on travel_plans
     await client.query('CREATE INDEX IF NOT EXISTS idx_travel_plans_user_id ON travel_plans(user_id);');
     await client.query('CREATE INDEX IF NOT EXISTS idx_travel_plans_created_at ON travel_plans(created_at DESC);');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_travel_plans_user_created ON travel_plans(user_id, created_at DESC);');
 
     // 7. Apply disk schema.sql if present
     const schemaPath = findSchemaSqlPath();

@@ -228,6 +228,7 @@ export function sanitizeLogMessage(input: any): string {
   }
   return input
     .replace(/((?:key|apiKey|password|secret|token|bearer|authorization)=)[^\s&"']+/gi, '$1REDACTED')
+    .replace(/("(?:key|apiKey|password|secret|token|bearer|authorization)"\s*:\s*")[^"]+(")/gi, '$1REDACTED$2')
     .replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+(@)/gi, '$1REDACTED$2');
 }
 
@@ -568,8 +569,19 @@ async function startServer(): Promise<void> {
     console.log('OpenStreetMap discovery provider active (Nominatim + Overpass API). No paid maps API required.');
   });
 
+  let isShuttingDown = false;
   const handleShutdown = async (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     console.log(`[Shutdown] Received ${signal}. Closing HTTP server...`);
+
+    // Safety fallback: force exit after 10s if active sockets or queries hang
+    const forceExitTimer = setTimeout(() => {
+      console.warn('[Shutdown Warning] Forcing process exit after 10s shutdown timeout.');
+      process.exit(1);
+    }, 10000);
+    forceExitTimer.unref();
+
     server.close(async () => {
       console.log('[Shutdown] HTTP server closed.');
       if (process.env.DATABASE_URL) {
@@ -580,6 +592,7 @@ async function startServer(): Promise<void> {
           console.error('[Shutdown Error] Failed to close database pool:', poolErr?.message || poolErr);
         }
       }
+      clearTimeout(forceExitTimer);
       process.exit(0);
     });
   };

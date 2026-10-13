@@ -481,6 +481,21 @@ async function runSecurityTestSuite() {
     assert.ok(sanitized.includes('REDACTED'));
   });
 
+  await test('F3. Log sanitizer redacts sensitive JSON fields in error objects and strings', () => {
+    const jsonLog = JSON.stringify({
+      status: 'error',
+      password: 'MyTopSecretPassword!',
+      apiKey: 'AIzaSySecretApiKey123',
+      token: 'jwt.token.secret'
+    });
+    const sanitized = sanitizeLogMessage(jsonLog);
+
+    assert.ok(!sanitized.includes('MyTopSecretPassword!'));
+    assert.ok(!sanitized.includes('AIzaSySecretApiKey123'));
+    assert.ok(!sanitized.includes('jwt.token.secret'));
+    assert.ok(sanitized.includes('REDACTED'));
+  });
+
   // ---------------------------------------------------------------------------
   // TASK I: AI Request Abuse & Concurrency Lock
   // ---------------------------------------------------------------------------
