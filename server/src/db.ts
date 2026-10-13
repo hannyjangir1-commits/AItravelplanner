@@ -182,9 +182,65 @@ export function sanitizeDatabaseUrl(rawUrl?: string, sslConfig?: pg.ConnectionCo
   return rawUrl;
 }
 
+export interface SafeDbDiagnostics {
+  connectionPath: string;
+  databaseUrlConfigured: boolean;
+  hostname: string;
+  databaseSsl: string;
+  isInternal: boolean;
+  clientSslMode: string;
+}
+
+/**
+ * Returns safe startup diagnostics without credentials, query parameters, or sensitive data.
+ */
+export function getSafeDbDiagnostics(connectionPath: string): SafeDbDiagnostics {
+  const connectionStr = process.env.DATABASE_URL || '';
+  const host = extractDatabaseHost(connectionStr) || 'none';
+  const rawExplicitSsl = process.env.DATABASE_SSL;
+  const databaseSsl = (rawExplicitSsl !== undefined && rawExplicitSsl !== 'undefined' && rawExplicitSsl.trim() !== '')
+    ? rawExplicitSsl.trim().toLowerCase()
+    : '[NOT SET]';
+  const isInternal = isInternalDatabaseHost(host) || process.env.RENDER_INTERNAL_DB === 'true' || process.env.DATABASE_INTERNAL === 'true';
+
+  let clientSslMode = 'undefined';
+  try {
+    const ssl = getDatabaseSslConfig();
+    if (ssl === false) {
+      clientSslMode = 'false';
+    } else if (ssl === undefined) {
+      clientSslMode = 'undefined';
+    } else if (typeof ssl === 'object' && ssl !== null) {
+      clientSslMode = ssl.rejectUnauthorized ? '{ rejectUnauthorized: true }' : '{ custom }';
+    }
+  } catch (err: any) {
+    clientSslMode = `Error: ${err?.message || err}`;
+  }
+
+  return {
+    connectionPath,
+    databaseUrlConfigured: Boolean(process.env.DATABASE_URL),
+    hostname: host,
+    databaseSsl,
+    isInternal,
+    clientSslMode
+  };
+}
+
+/**
+ * Logs safe startup diagnostics without credentials.
+ */
+export function logSafeDbDiagnostics(connectionPath: string): void {
+  const diag = getSafeDbDiagnostics(connectionPath);
+  console.log(
+    `[DB Diagnostics] Path: ${diag.connectionPath} | DB_URL: ${diag.databaseUrlConfigured ? 'Configured' : 'Missing'} | Host: ${diag.hostname} | Internal: ${diag.isInternal} | DATABASE_SSL: ${diag.databaseSsl} | Client SSL: ${diag.clientSslMode}`
+  );
+}
+
 // Initialized pool using sanitized connection string and strict SSL configuration
 const sslConfig = getDatabaseSslConfig();
 const connectionString = sanitizeDatabaseUrl(process.env.DATABASE_URL, sslConfig);
+logSafeDbDiagnostics('[SharedPool:db.ts]');
 
 export const pool = new Pool({
   connectionString,

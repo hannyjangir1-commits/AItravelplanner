@@ -13,7 +13,7 @@
 
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
-import { validateJwtSecret, getAuthConfig, isAuthConfigured } from './src/auth/config.js';
+import { validateJwtSecret, getAuthConfig } from './src/auth/config.js';
 import { signAuthToken, verifyAuthToken } from './src/auth/jwt.js';
 import { getAllowedOrigins, sanitizeLogMessage } from './src/index.js';
 import {
@@ -24,7 +24,9 @@ import {
   isAllowedOrigin
 } from './src/middleware/csrf.js';
 import { AUTH_COOKIE_NAME } from './src/middleware/auth.js';
-import { getDatabaseSslConfig, sanitizeDatabaseUrl, isInternalDatabaseHost, extractDatabaseHost } from './src/db.js';
+import { getDatabaseSslConfig, sanitizeDatabaseUrl, getSafeDbDiagnostics } from './src/db.js';
+import { resetDatabase } from './src/db/reset.js';
+import { Client } from 'pg';
 
 let passed = 0;
 let total = 0;
@@ -608,6 +610,78 @@ async function runSecurityTestSuite() {
       process.env.NODE_ENV = origEnv;
       process.env.DATABASE_URL = origDb;
       process.env.DATABASE_SSL = origSsl;
+    }
+  });
+
+  await test('E10. Exact PostgreSQL Client configuration uses ssl: false with sanitized internal URL', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATABASE_URL = 'postgresql://travelgenie_user:secretpassword@dpg-c1234567890abcdef-a:5432/travelgenie_db?sslmode=require&ssl=true';
+      process.env.DATABASE_SSL = 'false';
+
+      const ssl = getDatabaseSslConfig();
+      assert.equal(ssl, false);
+
+      const sanitizedUrl = sanitizeDatabaseUrl(process.env.DATABASE_URL, ssl);
+      assert.ok(sanitizedUrl !== undefined);
+      assert.ok(!sanitizedUrl.includes('sslmode=require'));
+      assert.ok(!sanitizedUrl.includes('ssl=true'));
+
+      const client = new Client({
+        connectionString: sanitizedUrl,
+        ssl
+      });
+
+      assert.equal(client.ssl, false);
+      assert.equal((client as any).connectionParameters.ssl, false);
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
+    }
+  });
+
+  await test('E11. getSafeDbDiagnostics returns sanitized hostname without credentials or passwords', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATABASE_URL = 'postgresql://travelgenie_user:supersecretpass@dpg-c1234567890abcdef-a:5432/travelgenie_db?app=travelgenie';
+      process.env.DATABASE_SSL = 'false';
+
+      const diag = getSafeDbDiagnostics('[SharedPool:test]');
+      assert.equal(diag.connectionPath, '[SharedPool:test]');
+      assert.equal(diag.databaseUrlConfigured, true);
+      assert.equal(diag.hostname, 'dpg-c1234567890abcdef-a');
+      assert.equal(diag.isInternal, true);
+      assert.equal(diag.databaseSsl, 'false');
+      assert.equal(diag.clientSslMode, 'false');
+      assert.ok(!JSON.stringify(diag).includes('supersecretpass'));
+      assert.ok(!JSON.stringify(diag).includes('travelgenie_user'));
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
+    }
+  });
+
+  await test('E12. resetDatabase strictly refuses execution when ALLOW_DESTRUCTIVE_SCHEMA_RESET is absent', async () => {
+    const origReset = process.env.ALLOW_DESTRUCTIVE_SCHEMA_RESET;
+    try {
+      delete process.env.ALLOW_DESTRUCTIVE_SCHEMA_RESET;
+      const res = await resetDatabase();
+      assert.equal(res.success, false);
+      assert.ok(res.message.includes('Destructive schema reset is strictly disallowed without explicit authorization'));
+    } finally {
+      if (origReset !== undefined) {
+        process.env.ALLOW_DESTRUCTIVE_SCHEMA_RESET = origReset;
+      } else {
+        delete process.env.ALLOW_DESTRUCTIVE_SCHEMA_RESET;
+      }
     }
   });
 

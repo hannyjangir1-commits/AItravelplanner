@@ -34,13 +34,6 @@ interface UserDbRow {
 // In-memory store strictly for local dev/testing when DATABASE_URL is not configured
 const memUsers = new Map<string, UserWithPassword & { email?: string | null; profilePicture?: string | null }>();
 
-function isDevInMemoryAllowed(): boolean {
-  if (process.env.NODE_ENV === 'production') {
-    return false;
-  }
-  return !process.env.DATABASE_URL;
-}
-
 /**
  * Creates a new user record in PostgreSQL with a hashed password.
  * Guaranteed unique username.

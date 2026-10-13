@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { pool } from '../db.js';
+import { pool, logSafeDbDiagnostics } from '../db.js';
 import { hashPassword } from '../auth/password.js';
 import { signAuthToken } from '../auth/jwt.js';
 
@@ -16,6 +16,7 @@ export interface DbHealthResult {
     username: boolean;
     password_hash: boolean;
   };
+  migrationsTableReady?: boolean;
 }
 
 /**
@@ -75,7 +76,8 @@ export async function checkDbHealth(): Promise<DbHealthResult> {
       requiredColumns: {
         username: false,
         password_hash: false
-      }
+      },
+      migrationsTableReady: false
     };
   }
 
@@ -91,7 +93,8 @@ export async function checkDbHealth(): Promise<DbHealthResult> {
       requiredColumns: {
         username: false,
         password_hash: false
-      }
+      },
+      migrationsTableReady: false
     };
   }
 
@@ -114,9 +117,11 @@ export async function checkDbHealth(): Promise<DbHealthResult> {
     const tableRes = await client.query(`
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = 'travel_plans';
+      WHERE table_schema = 'public' AND table_name IN ('travel_plans', 'schema_migrations');
     `);
-    const hasTravelPlans = tableRes.rows.length > 0;
+    const activeTables = new Set(tableRes.rows.map((r: { table_name: string }) => r.table_name));
+    const hasTravelPlans = activeTables.has('travel_plans');
+    const hasMigrationsTable = activeTables.has('schema_migrations');
 
     const schemaReady = Boolean(hasUsername && hasPasswordHash && hasTravelPlans);
     const success = schemaReady;
@@ -128,7 +133,8 @@ export async function checkDbHealth(): Promise<DbHealthResult> {
       requiredColumns: {
         username: hasUsername,
         password_hash: hasPasswordHash
-      }
+      },
+      migrationsTableReady: hasMigrationsTable
     };
   } catch (queryErr: any) {
     console.error('[DB Health Check Error]: Query error:', queryErr?.message || queryErr);
@@ -139,7 +145,8 @@ export async function checkDbHealth(): Promise<DbHealthResult> {
       requiredColumns: {
         username: false,
         password_hash: false
-      }
+      },
+      migrationsTableReady: false
     };
   } finally {
     client.release();
@@ -212,8 +219,9 @@ export async function runSignupDiagnosticTest(): Promise<{ success: boolean; mes
 }
 
 /**
- * Executes core idempotent schema creation and migrations before the HTTP server begins listening.
- * Ensures users table has username, password_hash, place, and indexes.
+ * Executes core idempotent schema creation and versioned migrations before the HTTP server begins listening.
+ * Ensures schema_migrations tracks applied versions.
+ * Ensures users table has all required columns and indexes.
  * Ensures travel_plans table has all columns and foreign keys.
  * Runs signup diagnostic test with transaction rollback.
  * Does NOT call pool.end() so the application pool remains active.
@@ -225,6 +233,7 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
     return { success: true, message: msg };
   }
 
+  logSafeDbDiagnostics('[SharedPool:runStartupMigrations]');
   console.log('[DB Startup] Connecting to PostgreSQL to apply schema and migrations...');
 
   const MIGRATION_ADVISORY_LOCK_ID = 84729104;
@@ -244,48 +253,41 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
       console.log('[DB Startup] Notice: Extension pgcrypto creation skipped or not permitted (using native gen_random_uuid):', extErr?.message);
     }
 
-    // 2. Ensure users table exists with base columns
+    // 2. Ensure schema_migrations table exists
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id SERIAL PRIMARY KEY,
+        version VARCHAR(50) NOT NULL UNIQUE,
+        name VARCHAR(255) NOT NULL,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        checksum VARCHAR(64) NULL
+      );
+    `);
+
+    // 3. Ensure users table exists with base columns and constraints
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        username VARCHAR(255) UNIQUE,
+        username VARCHAR(255),
         password_hash TEXT,
         google_id VARCHAR(255) UNIQUE,
         name VARCHAR(255),
         email VARCHAR(255) UNIQUE,
         profile_picture TEXT,
         place VARCHAR(255),
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT chk_users_has_identity CHECK (
+          username IS NOT NULL OR google_id IS NOT NULL OR email IS NOT NULL
+        )
       );
     `);
 
-    // 3. Ensure columns exist on users table even if users was created in an older step
-    await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(255);');
-    await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;');
-    await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS place VARCHAR(255);');
-
-    // 4. Ensure unique and performance indexes on users
-    await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique ON users(username);');
+    // 4. Ensure performance and uniqueness indexes on users
+    await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users(LOWER(username)) WHERE username IS NOT NULL;');
     await client.query('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);');
-
-    // Safe pre-check for any legacy case-variant duplicate usernames before applying index
-    const dupCheck = await client.query(`
-      SELECT LOWER(username) AS lower_username, COUNT(*) as cnt
-      FROM users
-      WHERE username IS NOT NULL
-      GROUP BY LOWER(username)
-      HAVING COUNT(*) > 1;
-    `);
-
-    if (dupCheck.rows.length > 0) {
-      console.warn('[DB Startup Warning] Case-insensitive duplicate usernames detected:');
-      dupCheck.rows.forEach((r: { lower_username: string; cnt: string | number }) => {
-        console.warn(` - Username variant key: '${r.lower_username}' (${r.cnt} records). Deduplication recommended.`);
-      });
-    } else {
-      await client.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users(LOWER(username)) WHERE username IS NOT NULL;');
-    }
+    await client.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;');
 
     // 5. Ensure travel_plans table exists
     await client.query(`
@@ -293,16 +295,16 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         destination VARCHAR(255) NOT NULL,
-        number_of_days INTEGER NOT NULL,
-        budget_inr NUMERIC NOT NULL,
-        number_of_travellers INTEGER NOT NULL,
-        interests JSONB NOT NULL,
+        number_of_days INTEGER NOT NULL CONSTRAINT chk_travel_plans_days CHECK (number_of_days > 0 AND number_of_days <= 90),
+        budget_inr NUMERIC NOT NULL CONSTRAINT chk_travel_plans_budget CHECK (budget_inr >= 0),
+        number_of_travellers INTEGER NOT NULL CONSTRAINT chk_travel_plans_travellers CHECK (number_of_travellers > 0 AND number_of_travellers <= 100),
+        interests JSONB NOT NULL DEFAULT '[]'::jsonb,
         accommodation_preference VARCHAR(50) NOT NULL,
         activity_level VARCHAR(50) NOT NULL,
         additional_notes TEXT,
         plan_data JSONB NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
@@ -311,13 +313,13 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
     await client.query('CREATE INDEX IF NOT EXISTS idx_travel_plans_created_at ON travel_plans(created_at DESC);');
     await client.query('CREATE INDEX IF NOT EXISTS idx_travel_plans_user_created ON travel_plans(user_id, created_at DESC);');
 
-    // 7. Apply disk schema.sql if present
+    // 7. Apply disk schema.sql if present and record in schema_migrations
     const schemaPath = findSchemaSqlPath();
     if (schemaPath) {
       console.log(`[DB Startup] Found schema file at: ${schemaPath}`);
     }
 
-    // 8. Apply disk migrations if present
+    // 8. Apply versioned disk migrations if present
     const migrationsDir = findMigrationsDirPath();
     if (migrationsDir) {
       const migrationFiles = fs.readdirSync(migrationsDir)
@@ -325,13 +327,27 @@ export async function runStartupMigrations(): Promise<{ success: boolean; messag
         .sort();
 
       for (const file of migrationFiles) {
-        const filePath = path.join(migrationsDir, file);
-        const migrationSql = fs.readFileSync(filePath, 'utf-8');
-        try {
-          await client.query(migrationSql);
-          console.log(`[DB Startup] Applied migration file: ${file}`);
-        } catch (migErr: any) {
-          console.log(`[DB Startup] Notice on migration file ${file}:`, migErr?.message);
+        const version = file.split('_')[0];
+        const existingCheck = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [version]);
+        if (existingCheck.rows.length === 0) {
+          const filePath = path.join(migrationsDir, file);
+          const migrationSql = fs.readFileSync(filePath, 'utf-8');
+          try {
+            await client.query('BEGIN');
+            await client.query(migrationSql);
+            await client.query(
+              'INSERT INTO schema_migrations (version, name, applied_at) VALUES ($1, $2, CURRENT_TIMESTAMP) ON CONFLICT (version) DO NOTHING',
+              [version, file]
+            );
+            await client.query('COMMIT');
+            console.log(`[DB Startup] Applied and recorded migration: ${file}`);
+          } catch (migErr: any) {
+            await client.query('ROLLBACK').catch(() => {});
+            console.error(`[DB Startup Error] Failed to apply migration ${file}:`, migErr?.message || migErr);
+            throw migErr;
+          }
+        } else {
+          console.log(`[DB Startup] Migration already applied: ${file}`);
         }
       }
     }
