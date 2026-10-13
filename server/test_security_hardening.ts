@@ -24,7 +24,7 @@ import {
   isAllowedOrigin
 } from './src/middleware/csrf.js';
 import { AUTH_COOKIE_NAME } from './src/middleware/auth.js';
-import { getDatabaseSslConfig } from './src/db.js';
+import { getDatabaseSslConfig, sanitizeDatabaseUrl, isInternalDatabaseHost, extractDatabaseHost } from './src/db.js';
 
 let passed = 0;
 let total = 0;
@@ -459,6 +459,155 @@ async function runSecurityTestSuite() {
       process.env.NODE_ENV = origEnv;
       process.env.DATABASE_URL = origDb;
       process.env.DB_CA_CERT = origCa;
+    }
+  });
+
+  await test('E4. Production internal connection mode (DATABASE_SSL=false) returns ssl: false and strips conflicting query params', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATABASE_URL = 'postgresql://travelgenie_user:secret@dpg-c1234567890abcdef-a:5432/travelgenie_db?sslmode=require&app=travelgenie';
+      process.env.DATABASE_SSL = 'false';
+
+      const ssl = getDatabaseSslConfig();
+      assert.equal(ssl, false);
+
+      const sanitizedUrl = sanitizeDatabaseUrl(process.env.DATABASE_URL, ssl);
+      assert.ok(sanitizedUrl !== undefined);
+      assert.ok(!sanitizedUrl.includes('sslmode=require'));
+      assert.ok(sanitizedUrl.includes('app=travelgenie'));
+      assert.ok(sanitizedUrl.includes('dpg-c1234567890abcdef-a'));
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
+    }
+  });
+
+  await test('E5. External database connection in production strictly enforces TLS with rejectUnauthorized: true', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATABASE_URL = 'postgresql://travelgenie_user:secret@dpg-c1234567890abcdef-a.oregon-postgres.render.com:5432/travelgenie_db';
+      delete process.env.DATABASE_SSL;
+
+      const ssl = getDatabaseSslConfig();
+      assert.ok(typeof ssl === 'object' && ssl !== null);
+      assert.equal(ssl.rejectUnauthorized, true);
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
+    }
+  });
+
+  await test('E6. Incompatible configuration: DATABASE_SSL=false on external production database throws sanitized error', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATABASE_URL = 'postgresql://travelgenie_user:secret@dpg-c1234567890abcdef-a.oregon-postgres.render.com:5432/travelgenie_db';
+      process.env.DATABASE_SSL = 'false';
+
+      assert.throws(() => {
+        getDatabaseSslConfig();
+      }, (err: any) => {
+        assert.ok(err.message.includes('prohibited for external database connections in production'));
+        assert.ok(!err.message.includes('secret'));
+        return true;
+      });
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
+    }
+  });
+
+  await test('E7. Conflicting configuration: DATABASE_SSL=false with DB_CA_CERT throws sanitized error', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+    const origCa = process.env.DB_CA_CERT;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATABASE_URL = 'postgresql://travelgenie_user:secret@dpg-c1234567890abcdef-a:5432/travelgenie_db';
+      process.env.DATABASE_SSL = 'false';
+      process.env.DB_CA_CERT = '-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----';
+
+      assert.throws(() => {
+        getDatabaseSslConfig();
+      }, (err: any) => {
+        assert.ok(err.message.includes('Conflicting configuration'));
+        return true;
+      });
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
+      process.env.DB_CA_CERT = origCa;
+    }
+  });
+
+  await test('E8. Invalid DATABASE_SSL value throws sanitized configuration error', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DATABASE_URL = 'postgresql://travelgenie_user:secret@dpg-c1234567890abcdef-a:5432/travelgenie_db';
+      process.env.DATABASE_SSL = 'no-verify';
+
+      assert.throws(() => {
+        getDatabaseSslConfig();
+      }, (err: any) => {
+        assert.ok(err.message.includes('Invalid DATABASE_SSL value "no-verify"'));
+        return true;
+      });
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
+    }
+  });
+
+  await test('E9. Confirmation that rejectUnauthorized: false is never returned as a workaround', () => {
+    const configs = [
+      { env: 'production', url: 'postgresql://u:p@dpg-c123-a:5432/db', ssl: 'false' },
+      { env: 'production', url: 'postgresql://u:p@dpg-c123-a.oregon-postgres.render.com:5432/db', ssl: 'true' },
+      { env: 'development', url: 'postgresql://postgres@127.0.0.1:5434/postgres', ssl: undefined },
+      { env: 'development', url: 'postgresql://postgres@127.0.0.1:5434/postgres', ssl: 'true' }
+    ];
+
+    const origEnv = process.env.NODE_ENV;
+    const origDb = process.env.DATABASE_URL;
+    const origSsl = process.env.DATABASE_SSL;
+
+    try {
+      for (const c of configs) {
+        process.env.NODE_ENV = c.env;
+        process.env.DATABASE_URL = c.url;
+        if (c.ssl !== undefined) {
+          process.env.DATABASE_SSL = c.ssl;
+        } else {
+          delete process.env.DATABASE_SSL;
+        }
+
+        const ssl = getDatabaseSslConfig();
+        if (typeof ssl === 'object' && ssl !== null) {
+          assert.equal(ssl.rejectUnauthorized, true);
+        } else {
+          assert.ok(ssl === false || ssl === undefined);
+        }
+      }
+    } finally {
+      process.env.NODE_ENV = origEnv;
+      process.env.DATABASE_URL = origDb;
+      process.env.DATABASE_SSL = origSsl;
     }
   });
 
