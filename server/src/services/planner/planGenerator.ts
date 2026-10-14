@@ -229,7 +229,11 @@ export async function generateTravelPlanService(
     };
   } catch (error: any) {
     const safeErrorMsg = redactApiKey(error?.message || 'Unknown error');
+    const cascadeDiagnostics = (error as any)?.diagnostics || [];
     console.warn(`[Gemini Service Fallback Trigger][${correlationId}]:`, safeErrorMsg);
+    if (cascadeDiagnostics.length > 0) {
+      console.warn(`[Gemini Cascade Diagnostics][${correlationId}]:`, JSON.stringify(cascadeDiagnostics));
+    }
 
     // If caller explicitly disabled fallback, throw safe formatted error
     if (options.allowFallback === false) {
@@ -301,8 +305,8 @@ export async function generateTravelPlanService(
           geminiMs: 0,
           model: 'grounded-fallback',
           modelUsed: 'grounded-fallback',
-          geminiAttempts: 0,
-          geminiCalls: 0,
+          geminiAttempts: cascadeDiagnostics.length,
+          geminiCalls: cascadeDiagnostics.length,
           parseValidationMs: 0
         }
       };

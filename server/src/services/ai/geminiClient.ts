@@ -6,13 +6,17 @@ import { redactApiKey } from './jsonParser.js';
 /**
  * Prioritized official Gemini models for travel plan generation.
  * Order:
- * 1. gemini-3-flash-preview (Fast, current official flash preview)
- * 2. gemini-3.8-flash (High quality flash model)
- * 3. gemini-3.5-flash (Low latency, high throughput)
- * 4. gemini-3.6-flash (Fast, verified GA)
- * 5. gemini-flash-latest (Alias fallback)
+ * 1. gemini-flash-lite-latest (Fastest, active quota pool, verified official GA)
+ * 2. gemini-3.5-flash-lite (Ultra-low latency flash-lite tier)
+ * 3. gemini-3-flash-preview (Official flash preview)
+ * 4. gemini-3.8-flash (High quality flash model)
+ * 5. gemini-3.5-flash (Low latency, high throughput)
+ * 6. gemini-3.6-flash (Fast, verified GA)
+ * 7. gemini-flash-latest (Alias fallback)
  */
 export const GEMINI_MODELS = [
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash-lite',
   'gemini-3-flash-preview',
   'gemini-3.8-flash',
   'gemini-3.5-flash',
@@ -22,10 +26,21 @@ export const GEMINI_MODELS = [
 
 export type GeminiModelName = typeof GEMINI_MODELS[number];
 
+export interface GeminiModelAttemptDiagnostic {
+  model: string;
+  attempt: number;
+  durationMs: number;
+  status?: number;
+  phase: 'connection' | 'generation' | 'response_extraction' | 'timeout';
+  errorCategory: 'quota_exhausted' | 'rate_limit' | 'not_found' | 'overloaded' | 'timeout' | 'network_error' | 'invalid_response' | 'unknown';
+  message: string;
+}
+
 export interface GeminiCallMetrics {
   model: string;
   durationMs: number;
   totalAttempts: number;
+  attempts?: GeminiModelAttemptDiagnostic[];
 }
 
 export interface CallGeminiOptions {
@@ -45,13 +60,13 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Call Gemini API with user prompt and system instruction.
- * Iterates through GEMINI_MODELS in priority order.
+ * Iterates through GEMINI_MODELS in priority order (or starts with process.env.GEMINI_MODEL if configured).
  * - 404 / 400 errors move immediately to next model.
  * - 429 quota exhaustion (RESOURCE_EXHAUSTED) moves immediately to next candidate model without retry delay.
  * - Transient 429 / 503 errors retry with bounded backoff (1s) before moving to next model.
- * - API keys and credentials are strictly redacted from all error messages and logs.
- * - Uses a cumulative 60-second budget across all model attempts to respect Render's
- *   100-second gateway timeout. Each individual fetch gets a 15-second cap (min 3s).
+ * - Captures actionable per-attempt diagnostics with credentials redacted.
+ * - Uses a cumulative 60-second budget across all model attempts to respect Render's gateway timeout.
+ *   Each individual fetch gets a 25-second cap (min 3s).
  */
 export async function callGemini(
   systemPrompt: string,
@@ -75,10 +90,11 @@ export async function callGemini(
   const MAX_RETRIES_PER_MODEL = 2;
   const CUMULATIVE_BUDGET_MS = 60000;
   const MIN_REQUEST_TIMEOUT_MS = 3000;
-  const ATTEMPT_TIMEOUT_MS = 15000; // 15s max per individual model attempt to prevent long hangs
+  const ATTEMPT_TIMEOUT_MS = 25000; // 25s per attempt for complex multi-day structured plans
   const cascadeStart = Date.now();
   let lastError = '';
   let totalAttemptsCount = 0;
+  const diagnostics: GeminiModelAttemptDiagnostic[] = [];
 
   const requestBody = {
     systemInstruction: {
@@ -97,9 +113,9 @@ export async function callGemini(
     }
   };
 
-  const configuredModel = process.env.GEMINI_MODEL?.trim() as GeminiModelName | undefined;
-  const modelsToTry: GeminiModelName[] = configuredModel && (GEMINI_MODELS as readonly string[]).includes(configuredModel)
-    ? [configuredModel, ...GEMINI_MODELS.filter((m) => m !== configuredModel)]
+  const configuredModel = process.env.GEMINI_MODEL?.trim();
+  const modelsToTry: string[] = configuredModel
+    ? [configuredModel, ...GEMINI_MODELS.filter((m) => (m as string) !== configuredModel)]
     : [...GEMINI_MODELS];
 
   for (const model of modelsToTry) {
@@ -110,7 +126,9 @@ export async function callGemini(
       if (remainingMs <= 0) {
         lastError = `Cumulative timeout budget (${CUMULATIVE_BUDGET_MS / 1000}s) exhausted after ${Math.round(elapsed / 1000)}s.`;
         console.warn(`[Gemini][${correlationId}] ${lastError} Stopping cascade.`);
-        throw new Error(`All Gemini models unavailable. Last error: ${lastError}`);
+        const err = new Error(`All Gemini models unavailable. Last error: ${lastError}`);
+        (err as any).diagnostics = diagnostics;
+        throw err;
       }
       const requestTimeoutMs = Math.min(ATTEMPT_TIMEOUT_MS, Math.max(remainingMs, MIN_REQUEST_TIMEOUT_MS));
 
@@ -129,16 +147,26 @@ export async function callGemini(
           signal: AbortSignal.timeout(requestTimeoutMs)
         });
 
+        const attemptDuration = Date.now() - attemptStart;
+
         if (response.ok) {
           const data: any = await response.json();
           const candidate = data.candidates?.[0];
           const text = candidate?.content?.parts?.[0]?.text;
 
           if (!text || typeof text !== 'string') {
+            diagnostics.push({
+              model,
+              attempt,
+              durationMs: attemptDuration,
+              status: response.status,
+              phase: 'response_extraction',
+              errorCategory: 'invalid_response',
+              message: 'Empty or missing text in candidate'
+            });
             throw new Error('Empty response from model');
           }
 
-          const attemptDuration = Date.now() - attemptStart;
           const totalDuration = Date.now() - cascadeStart;
           console.log(
             `[Gemini][${correlationId}] Success with ${model} on attempt ${attempt} (${text.length} chars, duration: ${attemptDuration}ms, total elapsed: ${Math.round(totalDuration / 1000)}s)`
@@ -149,7 +177,8 @@ export async function callGemini(
             metrics: {
               model,
               durationMs: attemptDuration,
-              totalAttempts: totalAttemptsCount
+              totalAttempts: totalAttemptsCount,
+              attempts: diagnostics
             }
           };
         }
@@ -159,12 +188,6 @@ export async function callGemini(
         const sanitizedErrorMsg = redactApiKey(rawErrorMsg, apiKey);
         lastError = `${model} (${response.status}): ${sanitizedErrorMsg}`;
 
-        // Case 1: Model not found (404) or invalid argument (400) -> move immediately to next model
-        if (response.status === 404 || response.status === 400) {
-          console.warn(`[Gemini][${correlationId}] ${model} returned ${response.status} (${sanitizedErrorMsg}), skipping to next candidate model.`);
-          break; // break retry loop for this model
-        }
-
         const rawStatus = errorData?.error?.status || '';
         const isQuotaExhausted = response.status === 429 && (
           rawStatus === 'RESOURCE_EXHAUSTED' ||
@@ -172,14 +195,48 @@ export async function callGemini(
           sanitizedErrorMsg.toLowerCase().includes('quota')
         );
 
+        // Case 1: Model not found (404) or invalid argument (400) -> move immediately to next model
+        if (response.status === 404 || response.status === 400) {
+          diagnostics.push({
+            model,
+            attempt,
+            durationMs: attemptDuration,
+            status: response.status,
+            phase: 'generation',
+            errorCategory: response.status === 404 ? 'not_found' : 'unknown',
+            message: sanitizedErrorMsg
+          });
+          console.warn(`[Gemini][${correlationId}] ${model} returned ${response.status} (${sanitizedErrorMsg}), skipping to next candidate model.`);
+          break; // break retry loop for this model
+        }
+
         // Case 2: Daily Quota Exhaustion (429 RESOURCE_EXHAUSTED) -> move immediately to next model without wasting time retrying
         if (isQuotaExhausted) {
+          diagnostics.push({
+            model,
+            attempt,
+            durationMs: attemptDuration,
+            status: response.status,
+            phase: 'generation',
+            errorCategory: 'quota_exhausted',
+            message: sanitizedErrorMsg
+          });
           console.warn(`[Gemini][${correlationId}] ${model} daily quota exhausted (429), skipping immediately to next candidate model.`);
           break; // break retry loop for this model
         }
 
         // Case 3: Transient rate limit (429) or Service Unavailable / Overloaded (503 / 500) -> retry with backoff
         if (response.status === 429 || response.status === 503 || response.status === 500) {
+          const category = response.status === 429 ? 'rate_limit' : 'overloaded';
+          diagnostics.push({
+            model,
+            attempt,
+            durationMs: attemptDuration,
+            status: response.status,
+            phase: 'generation',
+            errorCategory: category,
+            message: sanitizedErrorMsg
+          });
           if (attempt < MAX_RETRIES_PER_MODEL) {
             const reason = response.status === 429 ? 'transient rate limit' : 'high demand';
             console.warn(`[Gemini][${correlationId}] ${model} returned ${response.status} (${reason}), retrying in 1s...`);
@@ -192,18 +249,37 @@ export async function callGemini(
         }
 
         // Other status codes -> break and try next model
+        diagnostics.push({
+          model,
+          attempt,
+          durationMs: attemptDuration,
+          status: response.status,
+          phase: 'generation',
+          errorCategory: 'unknown',
+          message: sanitizedErrorMsg
+        });
         console.warn(`[Gemini][${correlationId}] ${model} returned ${response.status}: ${sanitizedErrorMsg}`);
         break;
 
       } catch (err: any) {
         const attemptDuration = Date.now() - attemptStart;
-        const rawErrMsg = err?.name === 'TimeoutError'
+        const isTimeout = err?.name === 'TimeoutError' || err?.message?.includes('abort') || err?.message?.includes('timeout');
+        const rawErrMsg = isTimeout
           ? `Individual attempt timed out after ${Math.round(attemptDuration / 1000)}s`
           : (err?.message || 'Network error');
         const sanitizedErrMsg = redactApiKey(rawErrMsg, apiKey);
         lastError = `${model} attempt ${attempt} failed: ${sanitizedErrMsg}`;
 
-        if (err?.name === 'TimeoutError' || rawErrMsg.includes('abort') || rawErrMsg.includes('timeout')) {
+        diagnostics.push({
+          model,
+          attempt,
+          durationMs: attemptDuration,
+          phase: isTimeout ? 'timeout' : 'connection',
+          errorCategory: isTimeout ? 'timeout' : 'network_error',
+          message: sanitizedErrMsg
+        });
+
+        if (isTimeout) {
           console.warn(`[Gemini][${correlationId}] ${model} timed out, moving to next candidate model.`);
           break;
         }
@@ -220,5 +296,7 @@ export async function callGemini(
     }
   }
 
-  throw new Error(`All Gemini models unavailable. Last error: ${lastError}`);
+  const finalError = new Error(`All Gemini models unavailable. Last error: ${lastError}`);
+  (finalError as any).diagnostics = diagnostics;
+  throw finalError;
 }

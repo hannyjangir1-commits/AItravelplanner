@@ -413,6 +413,9 @@ async function runRegressionSuite() {
 
   // 11. Model Cascade verification: Retired models are eliminated, active models present
   await test('11. Model cascade contains only active Google Gemini models', async () => {
+    assert.equal(GEMINI_MODELS[0], 'gemini-flash-lite-latest', 'Primary model must be fastest active flash-lite');
+    assert.ok(GEMINI_MODELS.includes('gemini-flash-lite-latest'));
+    assert.ok(GEMINI_MODELS.includes('gemini-3.5-flash-lite'));
     assert.ok(GEMINI_MODELS.includes('gemini-3-flash-preview'));
     assert.ok(GEMINI_MODELS.includes('gemini-3.8-flash'));
     assert.ok(GEMINI_MODELS.includes('gemini-3.5-flash'));
@@ -420,6 +423,68 @@ async function runRegressionSuite() {
     assert.ok(GEMINI_MODELS.includes('gemini-flash-latest'));
     assert.ok(!(GEMINI_MODELS as readonly string[]).includes('gemini-2.0-flash'), 'gemini-2.0-flash is retired (404)');
     assert.ok(!(GEMINI_MODELS as readonly string[]).includes('gemini-2.5-flash'), 'gemini-2.5-flash is retired (404)');
+  });
+
+  // 13. Dynamic GEMINI_MODEL resolution prioritizing configured environment model
+  await test('13. Configured GEMINI_MODEL takes immediate priority in model cascade', async () => {
+    const prevEnv = process.env.GEMINI_MODEL;
+    process.env.GEMINI_MODEL = 'custom-configured-model';
+    try {
+      let firstAttemptedUrl = '';
+      const mockFetch = async (url: any) => {
+        if (!firstAttemptedUrl) firstAttemptedUrl = String(url);
+        return new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ text: '{"itinerary": []}' }] } }]
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+      await callGemini('sys', 'user', { fetchFn: mockFetch as any });
+      assert.ok(firstAttemptedUrl.includes('custom-configured-model'), 'Configured model must be attempted first');
+    } finally {
+      if (prevEnv !== undefined) {
+        process.env.GEMINI_MODEL = prevEnv;
+      } else {
+        delete process.env.GEMINI_MODEL;
+      }
+    }
+  });
+
+  // 14. Actionable cascade diagnostics are recorded for model attempt failures
+  await test('14. Actionable diagnostics record phase, status, and category on failure', async () => {
+    const prevEnv = process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_MODEL;
+    try {
+      const mockFetch = async (url: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes('gemini-flash-lite-latest')) {
+          return new Response(
+            JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Daily limit exceeded' } }),
+            { status: 429, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ text: '{"itinerary": []}' }] } }]
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const res = await callGemini('sys', 'user', { fetchFn: mockFetch as any });
+      assert.ok(res.metrics.attempts && res.metrics.attempts.length > 0, 'Diagnostics attempts array must be present');
+      const firstDiag = res.metrics.attempts[0];
+      assert.equal(firstDiag.model, 'gemini-flash-lite-latest');
+      assert.equal(firstDiag.errorCategory, 'quota_exhausted');
+      assert.equal(firstDiag.status, 429);
+    } finally {
+      if (prevEnv !== undefined) {
+        process.env.GEMINI_MODEL = prevEnv;
+      } else {
+        delete process.env.GEMINI_MODEL;
+      }
+    }
   });
 
   // 12. Credentials and secrets are never exposed in logs or errors
